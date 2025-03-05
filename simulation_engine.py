@@ -1,0 +1,962 @@
+import numpy as np
+import pandas as pd
+import os
+import logging
+import random
+from scipy.stats import norm
+from datetime import datetime
+
+logger = logging.getLogger('FLIPR_Simulator.SimulationEngine')
+
+class SimulationEngine:
+    """Core engine for simulating FLIPR calcium responses and various error conditions"""
+
+    def __init__(self):
+        """Initialize the simulation engine with default parameters"""
+        # Default cell line characteristics - can be overridden by config
+        self.cell_lines = {
+            'Neurotypical': {'baseline': 500, 'peak_ionomycin': 3900, 'peak_other': 750, 'rise_rate': 0.05, 'decay_rate': 0.05},
+            'ASD': {'baseline': 500, 'peak_ionomycin': 3800, 'peak_other': 500, 'rise_rate': 0.1, 'decay_rate': 0.03},
+            'FXS': {'baseline': 500, 'peak_ionomycin': 3700, 'peak_other': 400, 'rise_rate': 0.07, 'decay_rate': 0.02},
+        }
+
+        # Default agonist characteristics
+        self.agonists = {
+            'ATP': 2.0,
+            'UTP': 1.8,
+            'Ionomycin': 3.0,
+            'Buffer': 0.1,  # No effect on peak response
+        }
+
+
+        # Set up default error models
+        self.error_models = {
+            # Cell-based errors
+            'cell_variability': self._apply_cell_variability,
+            'dye_loading': self._apply_dye_loading_issues,
+            'cell_health': self._apply_cell_health_problems,
+            'cell_density': self._apply_variable_cell_density,
+
+            # Reagent-based errors
+            'reagent_stability': self._apply_reagent_stability_issues,
+            'reagent_concentration': self._apply_incorrect_concentrations,
+            'reagent_contamination': self._apply_reagent_contamination,
+
+            # Equipment-based errors
+            'camera_errors': self._apply_camera_errors,
+            'liquid_handler': self._apply_liquid_handler_issues,
+            'timing_errors': self._apply_timing_inconsistencies,
+            'focus_problems': self._apply_focus_problems,
+
+            # Systematic errors
+            'edge_effects': self._apply_edge_effects,
+            'temperature_gradient': self._apply_temperature_gradient,
+            'evaporation': self._apply_evaporation,
+            'well_crosstalk': self._apply_well_crosstalk
+        }
+
+        # Default simulation parameters
+        self.default_params = {
+            'num_wells': 96,
+            'num_timepoints': 451,
+            'time_interval': 0.4,  # seconds
+            'agonist_addition_time': 10,  # seconds
+            'read_noise': 20,
+            'background': 100,
+            'photobleaching_rate': 0.0005,
+            'random_seed': 42
+        }
+
+
+
+    def simulate(self, config):
+        """
+        Run a full plate simulation with the given configuration
+
+        Args:
+            config (dict): Configuration parameters for the simulation
+
+        Returns:
+            dict: Simulation results including plate data and metadata
+        """
+        # Merge config with defaults
+        params = {**self.default_params, **config}
+
+        # Set random seed if specified
+        if 'random_seed' in params and params['random_seed'] is not None:
+            np.random.seed(params['random_seed'])
+            random.seed(params['random_seed'])
+
+        logger.info(f"Starting simulation with {params['num_timepoints']} timepoints")
+
+        # Calculate total time
+        total_time = params['num_timepoints'] * params['time_interval']
+
+        # Get plate dimensions based on plate type
+        if params.get('plate_type', '96-well') == '96-well':
+            rows, cols = 8, 12
+        else:
+            rows, cols = 16, 24
+
+        # Get plate layouts from config or create defaults
+        if 'cell_line_layout' in params:
+            cell_line_layout = np.array(params['cell_line_layout'])
+        else:
+            cell_line_layout = self._create_default_cell_line_layout(rows, cols, 'Neurotypical')
+
+        if 'agonist_layout' in params:
+            agonist_layout = np.array(params['agonist_layout'])
+        else:
+            agonist_layout = self._create_default_agonist_layout(rows, cols, 'ATP')
+
+        # Create default cell ID layout
+        cell_id_layout = self._create_default_cell_id_layout(rows * cols)
+
+        # Get concentration layout or create default
+        if 'concentration_layout' in params:
+            concentration_layout = np.array(params['concentration_layout'], dtype=float)
+        else:
+            concentration_layout = np.ones((rows, cols)) * 100.0  # Default 100µM everywhere
+
+        # Initialize plate data array and metadata
+        plate_data = np.zeros((rows * cols, params['num_timepoints']))
+        metadata = []
+
+        # Generate responses for each well
+        for row in range(rows):
+            for col in range(cols):
+                well = row * cols + col
+
+                cell_line = cell_line_layout[row, col]
+                agonist = agonist_layout[row, col]
+                cell_id = f"{chr(65 + row)}{col + 1}"  # e.g., A1, B5, etc.
+                concentration = concentration_layout[row, col]
+
+                if cell_line not in self.cell_lines or agonist not in self.agonists:
+                    plate_data[well] = self._add_realistic_noise(np.zeros(params['num_timepoints']),
+                                                               params['read_noise'],
+                                                               params['background'],
+                                                               params['photobleaching_rate'])
+                    metadata.append({
+                        'well_id': cell_id,
+                        'cell_id': cell_id,
+                        'cell_line': cell_line,
+                        'agonist': agonist,
+                        'concentration': concentration,
+                        'valid': False,
+                        'error': 'Invalid cell line or agonist'
+                    })
+                    continue
+
+                # Get normal response
+                cell_params = self.cell_lines[cell_line]
+
+                # Calculate dose-response factor
+                dose_response_factor = self._calculate_dose_response(agonist, concentration)
+
+                # Get agonist's intrinsic potency factor
+                agonist_factor = self.agonists[agonist]
+
+                # Calculate final response factor
+                response_factor = agonist_factor * dose_response_factor
+
+                # Generate calcium response
+                response = self._generate_calcium_response(
+                    cell_params['baseline'],
+                    cell_params['peak_ionomycin'],
+                    cell_params['peak_other'],
+                    cell_params['rise_rate'],
+                    cell_params['decay_rate'],
+                    response_factor,
+                    agonist,
+                    params['time_interval'],
+                    total_time,
+                    params['agonist_addition_time'],
+                    params['num_timepoints']
+                )
+
+                # Apply any active error models
+                if 'active_errors' in params:
+                    for error_type, settings in params['active_errors'].items():
+                        if error_type in self.error_models and random.random() < settings.get('probability', 0):
+                            response = self.error_models[error_type](response, well, row, col, params, settings)
+
+                # Add noise to the response
+                noisy_response = self._add_realistic_noise(
+                    response,
+                    params['read_noise'],
+                    params['background'],
+                    params['photobleaching_rate']
+                )
+
+                plate_data[well] = noisy_response
+
+                # Add metadata for this well
+                metadata.append({
+                    'well_id': cell_id,
+                    'cell_id': cell_id,
+                    'cell_line': cell_line,
+                    'agonist': agonist,
+                    'concentration': concentration,
+                    'response_factor': response_factor,
+                    'valid': True
+                })
+
+        logger.info(f"Simulation completed for {rows * cols} wells")
+
+        # Return simulation results
+        return {
+            'plate_data': plate_data,
+            'metadata': metadata,
+            'params': params,
+            'time_points': np.arange(0, total_time, params['time_interval']),
+            'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+
+    def _create_default_agonist_layout(self, rows, cols, default_agonist='ATP'):
+        """Create a default agonist layout with the specified default agonist"""
+        layout = np.empty((rows, cols), dtype=object)
+
+        # Fill most wells with the default agonist
+        layout.fill(default_agonist)
+
+        # Always include some controls
+        # Add Ionomycin in rightmost columns as positive control
+        for i in range(rows):
+            layout[i, cols-1] = 'Ionomycin'
+            layout[i, cols-2] = 'Ionomycin'
+
+        # Add Buffer in some wells as negative control
+        for i in range(rows):
+            if i % 2 == 0:  # Even rows
+                layout[i, cols-3] = 'Buffer'
+
+        return layout
+
+    def _create_default_cell_line_layout(self, rows, cols, default_cell_line='Neurotypical'):
+        """Create a default cell line layout with the specified default cell line"""
+        layout = np.empty((rows, cols), dtype=object)
+
+        # Fill most wells with the default cell line
+        layout.fill(default_cell_line)
+
+        # Add some variation in the rightmost columns for comparison
+        # Right column with Neurotypical (as positive control reference)
+        for i in range(rows):
+            layout[i, cols-1] = 'Neurotypical'
+
+        # Second to right column with ASD (as negative control reference)
+        for i in range(rows):
+            layout[i, cols-2] = 'ASD'
+
+        # Add some FXS samples if it's not the default
+        if default_cell_line != 'FXS':
+            for i in range(rows):
+                if i % 2 == 0:  # Even rows
+                    layout[i, cols-3] = 'FXS'
+
+        return layout
+
+    def _add_random_amount(self, value, amount=200):
+        """Add a random amount to a value within the specified range"""
+        random_amount = random.randint(-amount, amount)
+        new_value = value + random_amount
+        return max(0, new_value)  # Ensure value is non-negative
+
+    def _generate_calcium_response(self, baseline, peak_ionomycin, peak_other, rise_rate,
+                                 decay_rate, agonist_factor, agonist, time_interval,
+                                 total_time, agonist_addition_time, num_timepoints):
+        """Generate a calcium response curve based on the parameters"""
+        # Create time array
+        time = np.arange(0, total_time, time_interval)
+        response = np.zeros(num_timepoints)
+
+        # Add some randomness to baseline
+        baseline = self._add_random_amount(baseline)
+
+        # Set baseline values
+        response[:int(agonist_addition_time / time_interval)] = baseline
+
+        # Determine peak response time and value
+        peak_index = int((agonist_addition_time + 5) / time_interval)  # Peak 5 seconds after agonist addition
+        peak_time = time[peak_index]
+
+        # Select appropriate peak based on agonist
+        if agonist == 'Ionomycin':
+            peak = peak_ionomycin
+        else:
+            peak = peak_other
+
+        # Add randomness to peak
+        peak = self._add_random_amount(peak)
+
+        # Calculate adjusted peak based on agonist factor
+        adjusted_peak = baseline + (peak - baseline) * agonist_factor
+
+        # Generate response curve with rise and decay
+        response[int(agonist_addition_time / time_interval):] = baseline + (adjusted_peak - baseline) * (
+            norm.pdf(time[int(agonist_addition_time / time_interval):], peak_time, 1/rise_rate) /
+            norm.pdf(peak_time, peak_time, 1/rise_rate)
+        ) * np.exp(-decay_rate * (time[int(agonist_addition_time / time_interval):] - peak_time))
+
+        return response
+
+    def _add_realistic_noise(self, signal, read_noise=20, background=100, photobleaching_rate=0.0005):
+        """Add realistic noise to the fluorescence signal"""
+        # Ensure signal is float
+        signal = signal.astype(float)
+
+        # Ensure all values are non-negative for Poisson noise
+        signal = np.maximum(signal, 0.01)  # Set a small positive value to avoid zeros
+
+        # Shot noise (Poisson noise)
+        noisy_signal = np.random.poisson(signal).astype(float)
+
+        # Read noise (Gaussian)
+        noisy_signal += np.random.normal(0, read_noise, signal.shape)
+
+        # Background noise
+        noisy_signal += background
+
+        # Photobleaching
+        time = np.arange(len(signal))
+        photobleaching = np.exp(-photobleaching_rate * time)
+        noisy_signal *= photobleaching
+
+        return np.maximum(noisy_signal, 0).round(2)  # Ensure non-negative values and round
+
+    # Default layout generators
+    def _create_default_cell_id_layout(self, num_wells):
+        """Create a default cell ID layout for the plate"""
+        rows, cols = 8, num_wells // 8
+        layout = np.empty((rows, cols), dtype=object)
+
+        for i in range(rows):
+            for j in range(cols):
+                if j == cols - 1:
+                    layout[i, j] = 'Positive Control'
+                elif j == cols - 2:
+                    layout[i, j] = 'Negative Control'
+                else:
+                    layout[i, j] = f'ID_{i*cols + j + 1:03d}'
+
+        return layout
+
+    # Error simulation methods
+    def _apply_cell_variability(self, response, well, row, col, params, settings):
+        """Apply increased variability in cell responses"""
+        variability = settings.get('intensity', 0.5)
+        # Increase the random variation in peak height and kinetics
+        perturbed_response = response.copy()
+
+        # Find non-baseline portion of the response
+        baseline_end = int(params['agonist_addition_time'] / params['time_interval'])
+
+        # Calculate the peak of the response
+        if len(response) > baseline_end:
+            peak_index = baseline_end + np.argmax(response[baseline_end:])
+            peak_value = response[peak_index]
+            baseline = np.mean(response[:baseline_end])
+
+            # Apply random scaling to the peak
+            scale_factor = 1.0 + np.random.normal(0, variability)
+            scale_factor = max(0.1, scale_factor)  # Ensure it doesn't go too low
+
+            # Apply the scaling
+            perturbed_response[baseline_end:] = baseline + scale_factor * (response[baseline_end:] - baseline)
+
+        return perturbed_response
+
+    def _apply_dye_loading_issues(self, response, well, row, col, params, settings):
+        """Simulate problems with dye loading in cells"""
+        intensity = settings.get('intensity', 0.5)
+
+        # Dye loading issues mainly affect the baseline and overall signal intensity
+        baseline_scaling = max(0.2, 1.0 - intensity * np.random.random())
+
+        # Scale the entire response, simulating reduced dye loading
+        return response * baseline_scaling
+
+    def _apply_cell_health_problems(self, response, well, row, col, params, settings):
+        """Simulate unhealthy cells with altered calcium responses"""
+        intensity = settings.get('intensity', 0.5)
+
+        # Find baseline and post-stimulation portions
+        baseline_end = int(params['agonist_addition_time'] / params['time_interval'])
+
+        if len(response) <= baseline_end:
+            return response
+
+        # Get baseline and peak
+        baseline = np.mean(response[:baseline_end])
+        peak_index = baseline_end + np.argmax(response[baseline_end:])
+
+        # Unhealthy cells may have:
+        # 1. Higher baseline calcium (stressed cells)
+        # 2. Lower peak response
+        # 3. Slower decay rate
+
+        # Adjust baseline (increase)
+        baseline_shift = 1.0 + intensity * np.random.random()
+        altered_response = response.copy()
+        altered_response[:baseline_end] = response[:baseline_end] * baseline_shift
+
+        # Reduce peak height
+        peak_reduction = max(0.2, 1.0 - intensity * np.random.random())
+        post_stim = altered_response[baseline_end:]
+        post_stim = baseline + (post_stim - baseline) * peak_reduction
+
+        # Slower decay - flatten the tail of the response
+        if len(post_stim) > 10:
+            decay_start = np.argmax(post_stim)
+            if decay_start < len(post_stim) - 1:
+                decay_portion = post_stim[decay_start:]
+                # Make decay more gradual
+                decay_factor = 0.7 - 0.4 * intensity * np.random.random()  # Between 0.3-0.7
+                new_decay = baseline + (decay_portion[0] - baseline) * np.exp(
+                    -decay_factor * np.arange(len(decay_portion)) / len(decay_portion)
+                )
+                post_stim[decay_start:] = new_decay
+
+        altered_response[baseline_end:] = post_stim
+        return altered_response
+
+    def _apply_variable_cell_density(self, response, well, row, col, params, settings):
+        """Simulate variable cell density across wells"""
+        intensity = settings.get('intensity', 0.5)
+
+        # Cell density mainly affects the signal magnitude
+        # For lower density, the overall signal will be lower
+        density_factor = max(0.3, 1.0 - intensity * np.random.random())
+
+        # Find baseline
+        baseline_end = int(params['agonist_addition_time'] / params['time_interval'])
+        baseline = np.mean(response[:baseline_end]) if baseline_end > 0 else response[0]
+
+        # Scale response while preserving baseline
+        scaled_response = baseline + (response - baseline) * density_factor
+
+        return scaled_response
+
+    def _apply_reagent_stability_issues(self, response, well, row, col, params, settings):
+        """Simulate degraded or unstable reagents"""
+        intensity = settings.get('intensity', 0.5)
+
+        # Reagent issues mainly affect the peak response
+        baseline_end = int(params['agonist_addition_time'] / params['time_interval'])
+
+        if len(response) <= baseline_end:
+            return response
+
+        # Get baseline
+        baseline = np.mean(response[:baseline_end])
+
+        # Degraded reagents lead to reduced response
+        degradation_factor = max(0.1, 1.0 - intensity * np.random.random())
+
+        # Apply reduction to post-stimulation portion
+        altered_response = response.copy()
+        altered_response[baseline_end:] = baseline + (response[baseline_end:] - baseline) * degradation_factor
+
+        return altered_response
+
+    def _apply_incorrect_concentrations(self, response, well, row, col, params, settings):
+        """Simulate incorrect concentrations of agonists"""
+        intensity = settings.get('intensity', 0.5)
+        concentration_error = np.random.choice([-1, 1]) * intensity * np.random.random()
+
+        # Find baseline and post-stimulation portions
+        baseline_end = int(params['agonist_addition_time'] / params['time_interval'])
+
+        if len(response) <= baseline_end:
+            return response
+
+        # Get baseline
+        baseline = np.mean(response[:baseline_end])
+
+        # Apply concentration error effect
+        # Positive error -> higher concentration -> stronger response
+        # Negative error -> lower concentration -> weaker response
+        concentration_factor = 1.0 + concentration_error
+        concentration_factor = max(0.1, concentration_factor)  # Ensure it's not too low
+
+        altered_response = response.copy()
+        altered_response[baseline_end:] = baseline + (response[baseline_end:] - baseline) * concentration_factor
+
+        return altered_response
+
+    def _apply_reagent_contamination(self, response, well, row, col, params, settings):
+        """Simulate contaminated reagents causing unexpected responses"""
+        intensity = settings.get('intensity', 0.5)
+        contamination_type = np.random.choice(['noise', 'early_response', 'delayed_response'])
+
+        altered_response = response.copy()
+        baseline_end = int(params['agonist_addition_time'] / params['time_interval'])
+
+        if contamination_type == 'noise':
+            # Add additional noise to the signal
+            noise_level = intensity * 100  # Scale based on intensity
+            altered_response += np.random.normal(0, noise_level, size=len(response))
+
+        elif contamination_type == 'early_response':
+            # Simulate early activation before agonist addition
+            if baseline_end > 10:
+                early_start = max(0, baseline_end - int(10 / params['time_interval']))
+                baseline = np.mean(altered_response[:early_start])
+
+                # Create a mini-response before the main one
+                early_peak = baseline + intensity * (np.max(response) - baseline) * 0.3
+
+                # Generate small peak
+                for i in range(early_start, baseline_end):
+                    pos = (i - early_start) / (baseline_end - early_start)
+                    altered_response[i] = baseline + (early_peak - baseline) * np.sin(pos * np.pi)
+
+        elif contamination_type == 'delayed_response':
+            # Simulate delayed or irregular activation
+            if len(response) > baseline_end:
+                # Delay the response by a random amount
+                delay_points = int(intensity * 20 / params['time_interval'])
+                if baseline_end + delay_points < len(response):
+                    altered_response[baseline_end:baseline_end+delay_points] = response[baseline_end]
+                    altered_response[baseline_end+delay_points:] = response[baseline_end:-delay_points] if delay_points < len(response) - baseline_end else response[baseline_end:]
+
+        return np.maximum(altered_response, 0)  # Ensure non-negative values
+
+    def _apply_camera_errors(self, response, well, row, col, params, settings):
+        """Simulate camera artifacts and errors"""
+        intensity = settings.get('intensity', 0.5)
+        error_type = np.random.choice(['dead_pixels', 'saturation', 'noise_spike', 'signal_drop'])
+
+        altered_response = response.copy()
+
+        if error_type == 'dead_pixels':
+            # Simulate dead pixels by setting random points to fixed values
+            num_dead_pixels = int(intensity * 10)  # Scale with intensity
+            for _ in range(num_dead_pixels):
+                pixel_pos = random.randint(0, len(response) - 1)
+                dead_value = random.choice([0, np.max(response)])
+                altered_response[pixel_pos] = dead_value
+
+        elif error_type == 'saturation':
+            # Simulate camera saturation at high intensities
+            saturation_level = np.max(response) * (1 + 0.2 * intensity)
+            altered_response = np.minimum(altered_response, saturation_level)
+
+            # Make the saturated values perfectly flat
+            saturated_points = np.where(altered_response >= saturation_level * 0.99)[0]
+            altered_response[saturated_points] = saturation_level
+
+        elif error_type == 'noise_spike':
+            # Add occasional large spikes of noise
+            num_spikes = int(intensity * 5) + 1
+            for _ in range(num_spikes):
+                spike_pos = random.randint(0, len(response) - 1)
+                spike_magnitude = np.max(response) * intensity * 2
+                spike_direction = random.choice([-1, 1])
+                altered_response[spike_pos] += spike_direction * spike_magnitude
+
+        elif error_type == 'signal_drop':
+            # Simulate temporary signal drops
+            drop_start = random.randint(0, len(response) - 10)
+            drop_length = int(intensity * 10) + 1
+            drop_end = min(drop_start + drop_length, len(response))
+
+            # Reduce signal during the drop period
+            drop_factor = max(0.1, 1 - intensity * 0.9)
+            altered_response[drop_start:drop_end] *= drop_factor
+
+        return np.maximum(altered_response, 0)  # Ensure non-negative values
+
+    def _apply_liquid_handler_issues(self, response, well, row, col, params, settings):
+        """Simulate liquid handler issues like inaccurate dispensing"""
+        intensity = settings.get('intensity', 0.5)
+        issue_type = np.random.choice(['volume_error', 'timing_error', 'no_addition', 'double_addition'])
+
+        altered_response = response.copy()
+        baseline_end = int(params['agonist_addition_time'] / params['time_interval'])
+
+        if len(response) <= baseline_end:
+            return response
+
+        if issue_type == 'volume_error':
+            # Simulate wrong volume dispensed
+            volume_factor = 1.0 + np.random.normal(0, intensity)
+            volume_factor = max(0.1, volume_factor)  # Ensure it's not too low
+
+            # Apply to post-addition portion
+            baseline = np.mean(response[:baseline_end])
+            altered_response[baseline_end:] = baseline + volume_factor * (response[baseline_end:] - baseline)
+
+        elif issue_type == 'timing_error':
+            # Simulate addition at wrong time
+            timing_shift = int(intensity * 20 / params['time_interval']) * np.random.choice([-1, 1])
+
+            # Ensure we don't shift outside array bounds
+            new_baseline_end = max(5, min(len(response) - 10, baseline_end + timing_shift))
+
+            # Create shifted response
+            new_response = np.zeros_like(response)
+            new_response[:new_baseline_end] = np.mean(response[:baseline_end])
+
+            # Copy the post-addition response shape, but shifted
+            post_baseline_length = min(len(response) - new_baseline_end, len(response) - baseline_end)
+            if post_baseline_length > 0:
+                new_response[new_baseline_end:new_baseline_end+post_baseline_length] = response[baseline_end:baseline_end+post_baseline_length]
+
+            altered_response = new_response
+
+        elif issue_type == 'no_addition':
+            # Simulate failed addition - just keep baseline
+            baseline = np.mean(response[:baseline_end])
+            altered_response[baseline_end:] = baseline + np.random.normal(0, 20, size=len(response[baseline_end:]))
+
+        elif issue_type == 'double_addition':
+            # Simulate double addition - add a second peak
+            if len(response) > baseline_end + 20:
+                second_addition = baseline_end + int(20 / params['time_interval'])
+
+                # Copy the original response shape for the second addition
+                second_peak_length = min(len(response) - second_addition, len(response) - baseline_end)
+
+                if second_peak_length > 0:
+                    # Add the second response on top of the first
+                    baseline = np.mean(response[:baseline_end])
+                    second_response = baseline + 0.7 * (response[baseline_end:baseline_end+second_peak_length] - baseline)
+                    altered_response[second_addition:second_addition+second_peak_length] += second_response - baseline
+
+        return altered_response
+
+    def _apply_timing_inconsistencies(self, response, well, row, col, params, settings):
+        """Simulate timing issues with data collection"""
+        intensity = settings.get('intensity', 0.5)
+        issue_type = np.random.choice(['missing_points', 'irregular_sampling'])
+
+        altered_response = response.copy()
+
+        if issue_type == 'missing_points':
+            # Simulate missing data points
+            num_missing = int(intensity * 10) + 1
+            for _ in range(num_missing):
+                missing_pos = random.randint(0, len(response) - 1)
+
+                # Replace with interpolated nearby points or zeros
+                if missing_pos > 0 and missing_pos < len(response) - 1:
+                    altered_response[missing_pos] = (altered_response[missing_pos-1] + altered_response[missing_pos+1]) / 2
+                else:
+                    altered_response[missing_pos] = 0
+
+        elif issue_type == 'irregular_sampling':
+            # Simulate irregular time intervals by interpolating at incorrect positions
+            num_irregularities = int(intensity * 10) + 1
+
+            for _ in range(num_irregularities):
+                # Select a small region to distort
+                region_start = random.randint(0, len(response) - 10)
+                region_length = random.randint(3, 9)
+                region_end = min(region_start + region_length, len(response))
+
+                # Create irregular pattern by interpolating original values at different positions
+                original_segment = response[region_start:region_end].copy()
+
+                # Create irregular sampling pattern
+                positions = np.linspace(0, 1, len(original_segment))
+                new_positions = positions + intensity * 0.3 * np.random.random(len(positions))
+                new_positions = np.clip(new_positions, 0, 1)
+                new_positions.sort()
+
+                # Interpolate
+                from scipy.interpolate import interp1d
+                if len(original_segment) > 2:  # Need at least 3 points for cubic interpolation
+                    interp_func = interp1d(positions, original_segment, kind='cubic', bounds_error=False, fill_value="extrapolate")
+                    altered_response[region_start:region_end] = interp_func(new_positions)
+
+        return altered_response
+
+    def _apply_focus_problems(self, response, well, row, col, params, settings):
+        """Simulate focus problems affecting signal quality"""
+        intensity = settings.get('intensity', 0.5)
+
+        # Focus issues reduce signal quality and increase noise
+        altered_response = response.copy()
+
+        # Add increased noise
+        focus_noise = intensity * 50  # Scale based on intensity
+        altered_response += np.random.normal(0, focus_noise, size=len(response))
+
+        # Reduce signal contrast (difference between baseline and peak)
+        baseline_end = int(params['agonist_addition_time'] / params['time_interval'])
+        if len(response) > baseline_end:
+            baseline = np.mean(response[:baseline_end])
+            contrast_factor = max(0.3, 1.0 - intensity * 0.7)
+
+            # Apply contrast reduction while preserving baseline
+            altered_response[baseline_end:] = baseline + contrast_factor * (response[baseline_end:] - baseline)
+
+        return np.maximum(altered_response, 0)  # Ensure non-negative values
+
+    def _apply_edge_effects(self, response, well, row, col, params, settings):
+        """Simulate edge effects where wells at plate edges show different behavior"""
+        intensity = settings.get('intensity', 0.5)
+
+        # Edge effects are stronger for wells at the very edge of the plate
+        is_edge = (row == 0 or row == 7 or col == 0 or col == 11)  # For 96-well plate
+        is_corner = (row == 0 and col == 0) or (row == 0 and col == 11) or (row == 7 and col == 0) or (row == 7 and col == 11)
+
+        # Determine edge effect magnitude based on position
+        if is_corner:
+            edge_factor = intensity * 0.8  # Strongest in corners
+        elif is_edge:
+            edge_factor = intensity * 0.5  # Strong at edges
+        else:
+            # Declining effect as you move inward
+            distance_from_edge = min(row, 7-row, col, 11-col)
+            if distance_from_edge <= 1:
+                edge_factor = intensity * 0.3  # Moderate for second row/column
+            elif distance_from_edge <= 2:
+                edge_factor = intensity * 0.1  # Mild for third row/column
+            else:
+                edge_factor = 0  # No effect for interior wells
+
+        if edge_factor == 0:
+            return response  # No change for interior wells
+
+        # Edge effects typically cause:
+        # 1. Higher evaporation (higher baseline)
+        # 2. Temperature differences (altered kinetics)
+        # 3. Reduced signal (due to optical effects)
+
+        altered_response = response.copy()
+
+        # Baseline shift (evaporation effects)
+        baseline_end = int(params['agonist_addition_time'] / params['time_interval'])
+        if baseline_end > 0:
+            baseline = np.mean(response[:baseline_end])
+
+            # Increase baseline
+            baseline_shift = 1.0 + edge_factor * 0.5
+            altered_response[:baseline_end] *= baseline_shift
+
+        # Altered kinetics
+        if len(response) > baseline_end:
+            # Reduce peak height and change kinetics
+            signal_reduction = 1.0 - edge_factor * 0.3
+            kinetics_factor = 1.0 + edge_factor * 0.4  # Faster decay
+
+            # Apply to post-baseline portion
+            post_baseline = altered_response[baseline_end:]
+            baseline = np.mean(altered_response[:baseline_end]) if baseline_end > 0 else altered_response[0]
+
+            # Scale the peak height
+            post_baseline = baseline + (post_baseline - baseline) * signal_reduction
+
+            # Alter decay kinetics
+            if len(post_baseline) > 5:
+                peak_pos = np.argmax(post_baseline)
+                if peak_pos < len(post_baseline) - 5:
+                    # Apply faster decay after peak
+                    decay_portion = post_baseline[peak_pos:]
+                    new_decay = baseline + (decay_portion[0] - baseline) * np.exp(
+                        -kinetics_factor * np.arange(len(decay_portion)) / len(decay_portion)
+                    )
+                    post_baseline[peak_pos:] = new_decay
+
+            altered_response[baseline_end:] = post_baseline
+
+        return altered_response
+
+    def _apply_temperature_gradient(self, response, well, row, col, params, settings):
+        """Simulate temperature gradient effects across the plate"""
+        intensity = settings.get('intensity', 0.5)
+
+        # Define a temperature gradient across the plate
+        # For example, cooler on left side, warmer on right
+        x_gradient = col / 11.0  # 0 to 1 across columns
+        y_gradient = row / 7.0   # 0 to 1 across rows
+
+        # Combine to create a 2D gradient (could be customized for different patterns)
+        gradient_pattern = settings.get('pattern', 'left-to-right')
+
+        if gradient_pattern == 'left-to-right':
+            temp_factor = x_gradient
+        elif gradient_pattern == 'top-to-bottom':
+            temp_factor = y_gradient
+        elif gradient_pattern == 'center-to-edge':
+            center_x, center_y = 5.5, 3.5  # Center of 96-well plate
+            distance = np.sqrt((col - center_x)**2 + (row - center_y)**2)
+            max_distance = np.sqrt(center_x**2 + center_y**2)
+            temp_factor = distance / max_distance
+        else:
+            # Default: diagonal gradient
+            temp_factor = (x_gradient + y_gradient) / 2
+
+        # Temperature affects reaction kinetics
+        temp_effect = (temp_factor - 0.5) * intensity  # -0.5 to 0.5 times intensity
+
+        altered_response = response.copy()
+        baseline_end = int(params['agonist_addition_time'] / params['time_interval'])
+
+        if len(response) <= baseline_end:
+            return response
+
+        # Get baseline
+        baseline = np.mean(response[:baseline_end]) if baseline_end > 0 else response[0]
+        post_baseline = altered_response[baseline_end:]
+
+        # Warmer areas have:
+        # - Faster reaction kinetics (earlier peak)
+        # - Slightly higher peak
+        # - Faster decay
+
+        # Find original peak
+        if len(post_baseline) > 5:
+            peak_pos = np.argmax(post_baseline)
+            peak_value = post_baseline[peak_pos]
+
+            # Shift peak position based on temperature
+            shift_amount = int(temp_effect * 10)  # Shift earlier or later
+            new_peak_pos = max(0, min(len(post_baseline) - 1, peak_pos - shift_amount))
+
+            # Adjust peak height
+            peak_adjustment = 1.0 + temp_effect * 0.2
+
+            # Create new response curve with shifted peak
+            new_post_baseline = np.zeros_like(post_baseline)
+
+            # Create rising phase
+            for i in range(new_peak_pos + 1):
+                if peak_pos > 0:
+                    original_fraction = i / peak_pos
+                else:
+                    original_fraction = 1.0
+                original_fraction = min(1.0, original_fraction)
+                new_post_baseline[i] = baseline + original_fraction * (peak_value * peak_adjustment - baseline)
+
+            # Create decay phase
+            if new_peak_pos < len(post_baseline) - 1:
+                decay_rate = 1.0 + temp_effect * 0.3  # Warmer means faster decay
+                decay_length = len(post_baseline) - new_peak_pos - 1
+
+                for i in range(decay_length):
+                    fraction = i / decay_length
+                    new_post_baseline[new_peak_pos + 1 + i] = baseline + (peak_value * peak_adjustment - baseline) * np.exp(-decay_rate * fraction)
+
+            altered_response[baseline_end:] = new_post_baseline
+
+        return altered_response
+
+    def _apply_evaporation(self, response, well, row, col, params, settings):
+        """Simulate effects of evaporation over time"""
+        intensity = settings.get('intensity', 0.5)
+
+        # Evaporation is stronger for:
+        # - Edge wells (especially corners)
+        # - Longer experiments
+        # - Later timepoints
+
+        is_edge = (row == 0 or row == 7 or col == 0 or col == 11)  # For 96-well plate
+        is_corner = (row == 0 and col == 0) or (row == 0 and col == 11) or (row == 7 and col == 0) or (row == 7 and col == 11)
+
+        if is_corner:
+            position_factor = 1.0
+        elif is_edge:
+            position_factor = 0.7
+        else:
+            # Declining effect as you move inward
+            distance_from_edge = min(row, 7-row, col, 11-col)
+            position_factor = max(0.1, 1.0 - distance_from_edge * 0.3)
+
+        # Evaporation effects increase over time
+        time_points = len(response)
+        altered_response = response.copy()
+
+        for i in range(time_points):
+            # Increasing effect over time
+            time_factor = i / time_points
+
+            # Evaporation causes:
+            # 1. Concentration of dye (higher fluorescence)
+            # 2. Potential photobleaching compensation
+
+            # Combine factors
+            evaporation_effect = 1.0 + position_factor * intensity * time_factor * 0.4
+
+            altered_response[i] *= evaporation_effect
+
+        return altered_response
+
+    def _apply_well_crosstalk(self, response, well, row, col, params, settings):
+        """Simulate optical crosstalk between adjacent wells"""
+        intensity = settings.get('intensity', 0.5)
+
+        # Simplistic model: assume some percentage of signal bleeds from neighboring wells
+        # In a real implementation, this would depend on the actual contents of adjacent wells
+
+        # Generate a random "neighbor" signal
+        neighbor_response = np.random.random(len(response)) * np.max(response) * 0.8
+
+        # Add a realistic calcium response shape to the neighbor
+        baseline_end = int(params['agonist_addition_time'] / params['time_interval'])
+        if len(neighbor_response) > baseline_end + 5:
+            # Create a peak
+            baseline = np.mean(response[:baseline_end]) if baseline_end > 0 else 0
+            peak_pos = baseline_end + random.randint(5, 20)
+            peak_height = baseline + np.random.random() * np.max(response) * 0.5
+
+            # Create response curve
+            for i in range(baseline_end):
+                neighbor_response[i] = baseline
+
+            for i in range(baseline_end, peak_pos):
+                fraction = (i - baseline_end) / (peak_pos - baseline_end)
+                neighbor_response[i] = baseline + fraction * (peak_height - baseline)
+
+            for i in range(peak_pos, len(neighbor_response)):
+                decay_fraction = (i - peak_pos) / (len(neighbor_response) - peak_pos)
+                neighbor_response[i] = baseline + (peak_height - baseline) * np.exp(-decay_fraction * 3)
+
+        # Add some percentage of the neighbor signal to this well
+        crosstalk_factor = intensity * 0.1  # Max 10% crosstalk with max intensity
+        altered_response = response + crosstalk_factor * neighbor_response
+
+        return altered_response
+
+    def _calculate_dose_response(self, agonist, concentration):
+        """
+        Calculate dose-response factor using Hill equation
+
+        Args:
+            agonist (str): Agonist name
+            concentration (float): Concentration in µM
+
+        Returns:
+            float: Response factor between 0 and 1
+        """
+        # EC50 and Hill coefficient values for different agonists
+        ec50_values = {
+            'ATP': 100.0,  # EC50 of 100 µM
+            'UTP': 150.0,  # EC50 of 150 µM
+            'Ionomycin': 0.5,  # EC50 of 0.5 µM
+            'Buffer': float('inf')  # No response
+        }
+
+        hill_coefficients = {
+            'ATP': 1.5,
+            'UTP': 1.3,
+            'Ionomycin': 2.0,
+            'Buffer': 1.0
+        }
+
+        # Get EC50 and Hill coefficient, or use defaults if not found
+        ec50 = ec50_values.get(agonist, 100.0)
+        hill = hill_coefficients.get(agonist, 1.0)
+
+        # Handle special case for Buffer (should give minimal response)
+        if agonist == 'Buffer' or concentration <= 0:
+            return 0.05  # Minimal response for buffer
+
+        # Calculate response using Hill equation
+        response = concentration**hill / (ec50**hill + concentration**hill)
+
+        # Ensure response is between 0 and 1
+        return max(0, min(1, response))
