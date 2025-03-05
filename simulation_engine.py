@@ -5,6 +5,7 @@ import logging
 import random
 from scipy.stats import norm
 from datetime import datetime
+from scipy.interpolate import interp1d
 
 logger = logging.getLogger('FLIPR_Simulator.SimulationEngine')
 
@@ -306,11 +307,34 @@ class SimulationEngine:
         # Ensure signal is float
         signal = signal.astype(float)
 
-        # Ensure all values are non-negative for Poisson noise
-        signal = np.maximum(signal, 0.01)  # Set a small positive value to avoid zeros
+        # Ensure all values are in a valid range for Poisson noise
+        # NumPy's Poisson has issues with very small or very large lambda values
+        # For large values, we'll use Gaussian approximation of Poisson
 
-        # Shot noise (Poisson noise)
-        noisy_signal = np.random.poisson(signal).astype(float)
+        # First handle negative or very small values
+        signal = np.maximum(signal, 0.01)  # Set a small positive minimum
+
+        # Add shot noise (Poisson or Gaussian approximation)
+        noisy_signal = np.empty_like(signal)
+
+        # Use threshold to determine which method to use
+        # NumPy's poisson implementation typically has issues when lambda > 10^7
+        poisson_threshold = 1e7
+
+        # Split the signal into manageable and large values
+        small_mask = signal < poisson_threshold
+        large_mask = ~small_mask
+
+        # For small values, use actual Poisson distribution
+        if np.any(small_mask):
+            noisy_signal[small_mask] = np.random.poisson(signal[small_mask]).astype(float)
+
+        # For large values, use Gaussian approximation of Poisson: N(λ, λ)
+        # For Poisson distribution with large lambda, it approaches N(λ, λ)
+        if np.any(large_mask):
+            large_values = signal[large_mask]
+            std_dev = np.sqrt(large_values)  # Standard deviation is sqrt(lambda) for Poisson
+            noisy_signal[large_mask] = np.random.normal(large_values, std_dev)
 
         # Read noise (Gaussian)
         noisy_signal += np.random.normal(0, read_noise, signal.shape)
@@ -651,24 +675,55 @@ class SimulationEngine:
             num_irregularities = int(intensity * 10) + 1
 
             for _ in range(num_irregularities):
-                # Select a small region to distort
+                # Select a region to distort that's large enough for interpolation
                 region_start = random.randint(0, len(response) - 10)
-                region_length = random.randint(3, 9)
+                region_length = random.randint(5, 9)  # Ensure at least 5 points for interpolation
                 region_end = min(region_start + region_length, len(response))
+
+                # Check if region is large enough
+                if region_end - region_start < 4:
+                    continue  # Skip this iteration if region too small
 
                 # Create irregular pattern by interpolating original values at different positions
                 original_segment = response[region_start:region_end].copy()
 
-                # Create irregular sampling pattern
-                positions = np.linspace(0, 1, len(original_segment))
-                new_positions = positions + intensity * 0.3 * np.random.random(len(positions))
-                new_positions = np.clip(new_positions, 0, 1)
-                new_positions.sort()
+                # Create regular and irregular position arrays
+                original_positions = np.linspace(0, 1, len(original_segment))
 
-                # Interpolate
-                from scipy.interpolate import interp1d
-                if len(original_segment) > 2:  # Need at least 3 points for cubic interpolation
-                    interp_func = interp1d(positions, original_segment, kind='cubic', bounds_error=False, fill_value="extrapolate")
+                # Create irregular sampling pattern (ensure it's strictly increasing)
+                jitter = intensity * 0.3 * (np.random.random(len(original_segment)) - 0.5)
+                new_positions = original_positions + jitter
+                new_positions[0] = 0  # Ensure endpoints remain fixed
+                new_positions[-1] = 1
+                new_positions = np.sort(new_positions)  # Ensure strictly increasing
+
+                # Ensure minimum distance between points to avoid interpolation issues
+                min_distance = 1e-5
+                for i in range(1, len(new_positions)):
+                    if new_positions[i] - new_positions[i-1] < min_distance:
+                        new_positions[i] = new_positions[i-1] + min_distance
+
+                # Interpolate using the appropriate method based on number of points
+                try:
+                    if len(original_segment) >= 4:
+                        # Use cubic interpolation for 4+ points
+                        interp_func = interp1d(original_positions, original_segment, kind='cubic',
+                                             bounds_error=False, fill_value="extrapolate")
+                    elif len(original_segment) >= 3:
+                        # Use quadratic interpolation for 3 points
+                        interp_func = interp1d(original_positions, original_segment, kind='quadratic',
+                                             bounds_error=False, fill_value="extrapolate")
+                    else:
+                        # Use linear interpolation for 2 points
+                        interp_func = interp1d(original_positions, original_segment, kind='linear',
+                                             bounds_error=False, fill_value="extrapolate")
+
+                    # Apply interpolation
+                    altered_response[region_start:region_end] = interp_func(new_positions)
+                except Exception:
+                    # Fallback to linear interpolation if other methods fail
+                    interp_func = interp1d(original_positions, original_segment, kind='linear',
+                                         bounds_error=False, fill_value="extrapolate")
                     altered_response[region_start:region_end] = interp_func(new_positions)
 
         return altered_response

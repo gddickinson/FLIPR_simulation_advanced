@@ -147,6 +147,9 @@ class MainWindow(QMainWindow):
         main_widget = QWidget()
         main_layout = QVBoxLayout()
 
+        # First create the debug console so it's available to all tabs
+        self.debug_console = DebugConsole()
+
         # Create tab widget
         self.tabs = QTabWidget()
 
@@ -167,6 +170,9 @@ class MainWindow(QMainWindow):
         main_widget.setLayout(main_layout)
         self.setCentralWidget(main_widget)
 
+        # Add a test message to the console
+        self.debug_console.append_message("FLIPR Simulator initialized")
+
         # Log application start
         logger.info("FLIPR Simulator application started")
 
@@ -175,9 +181,6 @@ class MainWindow(QMainWindow):
         """Create the debug console tab"""
         tab = QWidget()
         layout = QVBoxLayout()
-
-        # Create debug console
-        self.debug_console = DebugConsole()
 
         # Add console control buttons
         console_controls = QHBoxLayout()
@@ -201,9 +204,6 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.debug_console)
 
         tab.setLayout(layout)
-
-        # Add a test message to the console
-        self.debug_console.append_message("FLIPR Simulator initialized")
 
         return tab
 
@@ -464,6 +464,16 @@ class MainWindow(QMainWindow):
                     concentration_layout.append(row_data)
                 config['concentration_layout'] = concentration_layout
 
+            # Get active errors from error simulation tab
+            if hasattr(self, 'get_active_errors'):
+                active_errors = self.get_active_errors()
+                if active_errors:
+                    config['active_errors'] = active_errors
+
+                    # Log the active errors
+                    error_names = list(active_errors.keys())
+                    self.debug_console.append_message(f"Including {len(error_names)} active errors: {', '.join(error_names)}")
+
             # Log configuration
             self.debug_console.append_message(f"Configuration: {config['num_timepoints']} timepoints, "
                                              f"{config['time_interval']}s interval, "
@@ -472,14 +482,19 @@ class MainWindow(QMainWindow):
             return config
 
         except Exception as e:
-            self.debug_console.append_message(f"Error getting simulation config", level='ERROR')
+            self.debug_console.append_message(f"Error getting simulation config: {str(e)}", level='ERROR')
             logger.error(f"Error getting simulation config: {str(e)}", exc_info=True)
+            return {}  # Return empty config on error
 
 
     def update_plot_type(self, plot_type):
         """Update the plot based on selected type"""
         if hasattr(self, 'last_results'):
             self.debug_console.append_message(f"Updating plot type to: {plot_type}")
+
+            # Ensure we completely reset the figure and axes before creating a new plot
+            self.canvas.fig.clear()
+            self.canvas.axes = self.canvas.fig.add_subplot(111)
 
             # Call appropriate plot method based on type
             if plot_type == "All Traces":
@@ -492,6 +507,9 @@ class MainWindow(QMainWindow):
                 self.plot_heatmap(self.last_results)
             elif plot_type == "Single Trace":
                 self.show_individual_trace()
+
+            # Ensure the canvas gets updated
+            self.canvas.draw()
 
     def plot_by_cell_line(self, results):
         """Plot results grouped by cell line, separated by agonist type"""
@@ -679,15 +697,20 @@ class MainWindow(QMainWindow):
             self.debug_console.append_message(f"Error plotting by agonist: {str(e)}", level='ERROR')
             logger.error(f"Error plotting by agonist: {str(e)}", exc_info=True)
 
+# Update the plot_heatmap method to properly clear colorbars
+
     def plot_heatmap(self, results):
         """Plot results as a plate heatmap"""
         try:
-            # Clear the canvas
-            self.canvas.axes.clear()
+            # Clear the entire figure first to remove old colorbars
+            self.canvas.fig.clear()
+
+            # Create a new axis
+            ax = self.canvas.fig.add_subplot(111)
 
             if not results or 'plate_data' not in results or 'params' not in results:
-                self.canvas.axes.text(0.5, 0.5, 'No valid data for heatmap plot',
-                                   ha='center', va='center', transform=self.canvas.axes.transAxes)
+                ax.text(0.5, 0.5, 'No valid data for heatmap plot',
+                       ha='center', va='center', transform=ax.transAxes)
                 self.canvas.draw()
                 return
 
@@ -711,17 +734,17 @@ class MainWindow(QMainWindow):
                         peak_data[row, col] = peak - baseline
 
             # Create heatmap
-            im = self.canvas.axes.imshow(peak_data, cmap='viridis')
-            plt.colorbar(im, ax=self.canvas.axes, label='Peak Response (F-F0)')
+            im = ax.imshow(peak_data, cmap='viridis')
+            cbar = self.canvas.fig.colorbar(im, ax=ax, label='Peak Response (F-F0)')
 
             # Add well labels
             for i in range(rows):
                 for j in range(cols):
-                    self.canvas.axes.text(j, i, f"{chr(65+i)}{j+1}", ha='center', va='center',
-                                      color='white', fontsize=8)
+                    ax.text(j, i, f"{chr(65+i)}{j+1}", ha='center', va='center',
+                              color='white', fontsize=8)
 
             # Set title and labels
-            self.canvas.axes.set_title('Peak Response Heatmap')
+            ax.set_title('Peak Response Heatmap')
 
             # Refresh canvas
             self.canvas.draw()
@@ -729,6 +752,8 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.debug_console.append_message(f"Error plotting heatmap: {str(e)}", level='ERROR')
             logger.error(f"Error plotting heatmap: {str(e)}", exc_info=True)
+
+
 
     def simulation_completed(self, results):
         """Handle simulation completion"""
@@ -1265,98 +1290,503 @@ class MainWindow(QMainWindow):
                 table.setItem(row, col, QTableWidgetItem(str(data[row][col])))
 
     def create_error_simulation_tab(self):
-        """Create the error simulation tab"""
+        """Create the error simulation tab with interactive controls"""
         tab = QWidget()
         layout = QVBoxLayout()
 
-        # Create groups for different error types
+        # Introduction text
+        intro_label = QLabel(
+            "Simulate various error conditions that can occur in FLIPR experiments. "
+            "Enable specific error types and adjust their probability and intensity. "
+            "These errors will be applied when you run a simulation."
+        )
+        intro_label.setWordWrap(True)
+        layout.addWidget(intro_label)
 
+        # Create a horizontal splitter
+        splitter = QSplitter(Qt.Horizontal)
+
+        # Left panel - error controls
+        error_panel = QWidget()
+        error_layout = QVBoxLayout()
+
+        # Create error type groups
         # Cell-based errors
         cell_error_group = QGroupBox("Cell-Based Errors")
         cell_error_layout = QVBoxLayout()
 
-        cell_variability = QCheckBox("Cell Variability")
-        cell_loading = QCheckBox("Dye Loading Issues")
-        cell_health = QCheckBox("Cell Health Problems")
-        cell_density = QCheckBox("Variable Cell Density")
+        self.cell_variability_check = QCheckBox("Cell Variability")
+        self.cell_variability_check.setToolTip("Introduces variability in cell responses")
 
-        cell_error_layout.addWidget(cell_variability)
-        cell_error_layout.addWidget(cell_loading)
-        cell_error_layout.addWidget(cell_health)
-        cell_error_layout.addWidget(cell_density)
+        self.dye_loading_check = QCheckBox("Dye Loading Issues")
+        self.dye_loading_check.setToolTip("Simulates problems with calcium dye loading")
+
+        self.cell_health_check = QCheckBox("Cell Health Problems")
+        self.cell_health_check.setToolTip("Simulates unhealthy cells with altered calcium response")
+
+        self.cell_density_check = QCheckBox("Variable Cell Density")
+        self.cell_density_check.setToolTip("Simulates uneven cell distribution across wells")
+
+        cell_error_layout.addWidget(self.cell_variability_check)
+        cell_error_layout.addWidget(self.dye_loading_check)
+        cell_error_layout.addWidget(self.cell_health_check)
+        cell_error_layout.addWidget(self.cell_density_check)
 
         cell_error_group.setLayout(cell_error_layout)
+        error_layout.addWidget(cell_error_group)
 
         # Reagent errors
         reagent_error_group = QGroupBox("Reagent-Based Errors")
         reagent_error_layout = QVBoxLayout()
 
-        reagent_stability = QCheckBox("Agonist Stability Issues")
-        reagent_concentration = QCheckBox("Incorrect Concentrations")
-        reagent_contamination = QCheckBox("Reagent Contamination")
+        self.reagent_stability_check = QCheckBox("Reagent Stability Issues")
+        self.reagent_stability_check.setToolTip("Simulates degraded reagents with reduced potency")
 
-        reagent_error_layout.addWidget(reagent_stability)
-        reagent_error_layout.addWidget(reagent_concentration)
-        reagent_error_layout.addWidget(reagent_contamination)
+        self.reagent_concentration_check = QCheckBox("Incorrect Concentrations")
+        self.reagent_concentration_check.setToolTip("Simulates pipetting errors causing concentration variations")
+
+        self.reagent_contamination_check = QCheckBox("Reagent Contamination")
+        self.reagent_contamination_check.setToolTip("Simulates contaminated reagents causing unexpected responses")
+
+        reagent_error_layout.addWidget(self.reagent_stability_check)
+        reagent_error_layout.addWidget(self.reagent_concentration_check)
+        reagent_error_layout.addWidget(self.reagent_contamination_check)
 
         reagent_error_group.setLayout(reagent_error_layout)
+        error_layout.addWidget(reagent_error_group)
 
         # Equipment errors
         equipment_error_group = QGroupBox("Equipment-Based Errors")
         equipment_error_layout = QVBoxLayout()
 
-        camera_error = QCheckBox("Camera Errors")
-        liquid_handler = QCheckBox("Liquid Handler Issues")
-        timing_error = QCheckBox("Timing Inconsistencies")
-        focus_error = QCheckBox("Focus Problems")
+        self.camera_error_check = QCheckBox("Camera Errors")
+        self.camera_error_check.setToolTip("Simulates camera artifacts and errors")
 
-        equipment_error_layout.addWidget(camera_error)
-        equipment_error_layout.addWidget(liquid_handler)
-        equipment_error_layout.addWidget(timing_error)
-        equipment_error_layout.addWidget(focus_error)
+        self.liquid_handler_check = QCheckBox("Liquid Handler Issues")
+        self.liquid_handler_check.setToolTip("Simulates inaccurate dispensing of reagents")
+
+        self.timing_error_check = QCheckBox("Timing Inconsistencies")
+        self.timing_error_check.setToolTip("Simulates timing issues with data collection")
+
+        self.focus_error_check = QCheckBox("Focus Problems")
+        self.focus_error_check.setToolTip("Simulates focus issues affecting signal quality")
+
+        equipment_error_layout.addWidget(self.camera_error_check)
+        equipment_error_layout.addWidget(self.liquid_handler_check)
+        equipment_error_layout.addWidget(self.timing_error_check)
+        equipment_error_layout.addWidget(self.focus_error_check)
 
         equipment_error_group.setLayout(equipment_error_layout)
+        error_layout.addWidget(equipment_error_group)
 
         # Systematic errors
         systematic_error_group = QGroupBox("Systematic Errors")
         systematic_error_layout = QVBoxLayout()
 
-        edge_effect = QCheckBox("Plate Edge Effects")
-        temperature = QCheckBox("Temperature Gradients")
-        evaporation = QCheckBox("Evaporation")
-        well_crosstalk = QCheckBox("Well-to-Well Crosstalk")
+        self.edge_effect_check = QCheckBox("Plate Edge Effects")
+        self.edge_effect_check.setToolTip("Simulates edge effects common in microplates")
 
-        systematic_error_layout.addWidget(edge_effect)
-        systematic_error_layout.addWidget(temperature)
-        systematic_error_layout.addWidget(evaporation)
-        systematic_error_layout.addWidget(well_crosstalk)
+        self.temperature_check = QCheckBox("Temperature Gradients")
+        self.temperature_check.setToolTip("Simulates temperature variations across the plate")
+
+        self.evaporation_check = QCheckBox("Evaporation")
+        self.evaporation_check.setToolTip("Simulates evaporation effects over time")
+
+        self.well_crosstalk_check = QCheckBox("Well-to-Well Crosstalk")
+        self.well_crosstalk_check.setToolTip("Simulates optical crosstalk between adjacent wells")
+
+        systematic_error_layout.addWidget(self.edge_effect_check)
+        systematic_error_layout.addWidget(self.temperature_check)
+        systematic_error_layout.addWidget(self.evaporation_check)
+        systematic_error_layout.addWidget(self.well_crosstalk_check)
 
         systematic_error_group.setLayout(systematic_error_layout)
+        error_layout.addWidget(systematic_error_group)
 
-        # Create error probability slider
-        error_prob_layout = QFormLayout()
-        error_prob_spin = QDoubleSpinBox()
-        error_prob_spin.setRange(0, 1)
-        error_prob_spin.setSingleStep(0.05)
-        error_prob_spin.setValue(0.1)
-        error_prob_layout.addRow("Error Probability:", error_prob_spin)
+        # Global error settings
+        global_settings_group = QGroupBox("Global Error Settings")
+        global_settings_layout = QFormLayout()
 
-        # Assemble layout
-        top_layout = QHBoxLayout()
-        top_layout.addWidget(cell_error_group)
-        top_layout.addWidget(reagent_error_group)
+        self.error_probability_spin = QDoubleSpinBox()
+        self.error_probability_spin.setRange(0, 1)
+        self.error_probability_spin.setValue(0.5)
+        self.error_probability_spin.setSingleStep(0.05)
+        self.error_probability_spin.setDecimals(2)
+        global_settings_layout.addRow("Error Probability:", self.error_probability_spin)
 
-        bottom_layout = QHBoxLayout()
-        bottom_layout.addWidget(equipment_error_group)
-        bottom_layout.addWidget(systematic_error_group)
+        self.error_intensity_spin = QDoubleSpinBox()
+        self.error_intensity_spin.setRange(0, 1)
+        self.error_intensity_spin.setValue(0.5)
+        self.error_intensity_spin.setSingleStep(0.05)
+        self.error_intensity_spin.setDecimals(2)
+        global_settings_layout.addRow("Error Intensity:", self.error_intensity_spin)
 
-        layout.addLayout(top_layout)
-        layout.addLayout(bottom_layout)
-        layout.addLayout(error_prob_layout)
+        global_settings_group.setLayout(global_settings_layout)
+        error_layout.addWidget(global_settings_group)
 
+        # Preset scenarios dropdown
+        preset_layout = QHBoxLayout()
+        preset_layout.addWidget(QLabel("Preset Error Scenarios:"))
+
+        self.error_preset_combo = QComboBox()
+        self.error_preset_combo.addItems([
+            "Custom Settings",
+            "Dye Loading Issues",
+            "Cell Health Problems",
+            "Liquid Handler Failure",
+            "Edge Effects",
+            "Camera Failure",
+            "Reagent Degradation",
+            "Combined Failures"
+        ])
+        self.error_preset_combo.currentTextChanged.connect(self.apply_error_preset)
+        preset_layout.addWidget(self.error_preset_combo, 1)
+
+        error_layout.addLayout(preset_layout)
+
+        # Control buttons
+        button_layout = QHBoxLayout()
+
+        self.apply_errors_btn = QPushButton("Apply Error Settings")
+        self.apply_errors_btn.clicked.connect(self.apply_error_settings)
+
+        self.clear_errors_btn = QPushButton("Clear All Errors")
+        self.clear_errors_btn.clicked.connect(self.clear_error_settings)
+
+        button_layout.addWidget(self.apply_errors_btn)
+        button_layout.addWidget(self.clear_errors_btn)
+        button_layout.addStretch()
+
+        error_layout.addLayout(button_layout)
+        error_layout.addStretch()
+
+        error_panel.setLayout(error_layout)
+
+        # Right panel - visualization
+        viz_panel = QWidget()
+        viz_layout = QVBoxLayout()
+
+        # Error visualization section
+        self.error_canvas = MatplotlibCanvas(viz_panel, width=6, height=5, dpi=100)
+        viz_layout.addWidget(self.error_canvas)
+
+        # Description of currently selected errors
+        self.error_description = QTextEdit()
+        self.error_description.setReadOnly(True)
+        self.error_description.setMinimumHeight(150)
+        self.error_description.setText(
+            "No errors selected. Use the checkboxes to enable specific error types or select a preset scenario."
+        )
+        viz_layout.addWidget(QLabel("Active Error Description:"))
+        viz_layout.addWidget(self.error_description)
+
+        viz_panel.setLayout(viz_layout)
+
+        # Add panels to splitter
+        splitter.addWidget(error_panel)
+        splitter.addWidget(viz_panel)
+        splitter.setSizes([400, 600])
+
+        layout.addWidget(splitter)
         tab.setLayout(layout)
 
+        # Initialize with all errors disabled
+        self.clear_error_settings()
+
         return tab
+
+    def apply_error_preset(self, preset_name):
+        """Apply a preset error scenario"""
+        if preset_name == "Custom Settings":
+            return  # Don't change current settings
+
+        # First clear all errors
+        self.clear_error_settings(update_ui=False)
+
+        # Set the global error settings
+        self.error_probability_spin.setValue(0.5)
+        self.error_intensity_spin.setValue(0.6)
+
+        # Apply specific preset
+        if preset_name == "Dye Loading Issues":
+            self.dye_loading_check.setChecked(True)
+            self.error_description.setText(
+                "Dye Loading Issues: Simulates problems with calcium dye loading in cells.\n\n"
+                "This results in reduced signal amplitude and altered baseline fluorescence. "
+                "Common causes include incomplete AM ester hydrolysis, dye compartmentalization, "
+                "or uneven loading across the cell population."
+            )
+
+        elif preset_name == "Cell Health Problems":
+            self.cell_health_check.setChecked(True)
+            self.error_description.setText(
+                "Cell Health Problems: Simulates unhealthy cells with altered calcium responses.\n\n"
+                "Unhealthy cells typically show higher baseline calcium, reduced peak responses, "
+                "and slower decay rates. This can be caused by cell stress, contamination, or "
+                "inappropriate culture conditions."
+            )
+
+        elif preset_name == "Liquid Handler Failure":
+            self.liquid_handler_check.setChecked(True)
+            self.error_probability_spin.setValue(0.7)
+            self.error_description.setText(
+                "Liquid Handler Failure: Simulates problems with agonist addition.\n\n"
+                "This includes inaccurate dispensing, timing errors, missed wells, or double additions. "
+                "Results in missing, delayed, or abnormal calcium responses that don't reflect the "
+                "true biology of the cells."
+            )
+
+        elif preset_name == "Edge Effects":
+            self.edge_effect_check.setChecked(True)
+            self.error_probability_spin.setValue(1.0)  # Always affects edge wells
+            self.error_description.setText(
+                "Edge Effects: Simulates microplate edge effects.\n\n"
+                "Wells at the plate edges often show different behavior due to thermal gradients, "
+                "evaporation, or optical effects. This typically results in higher variability and "
+                "systematic differences between edge and interior wells."
+            )
+
+        elif preset_name == "Camera Failure":
+            self.camera_error_check.setChecked(True)
+            self.error_description.setText(
+                "Camera Failure: Simulates camera artifacts and errors.\n\n"
+                "These include dead pixels, saturation, noise spikes, and signal drops. "
+                "Camera issues can result in artificial spikes, plateaus, or data gaps "
+                "that aren't related to actual calcium signaling."
+            )
+
+        elif preset_name == "Reagent Degradation":
+            self.reagent_stability_check.setChecked(True)
+            self.error_probability_spin.setValue(0.8)
+            self.error_description.setText(
+                "Reagent Degradation: Simulates degraded reagents with reduced potency.\n\n"
+                "Old or improperly stored reagents can lose activity, resulting in weaker responses. "
+                "This typically causes reduced peak height while maintaining normal kinetics."
+            )
+
+        elif preset_name == "Combined Failures":
+            self.edge_effect_check.setChecked(True)
+            self.liquid_handler_check.setChecked(True)
+            self.cell_variability_check.setChecked(True)
+            self.error_probability_spin.setValue(0.4)
+            self.error_description.setText(
+                "Combined Failures: Multiple errors occurring simultaneously.\n\n"
+                "Real experiments often suffer from multiple error types at once. This preset "
+                "combines edge effects, liquid handler issues, and cell variability to create "
+                "a challenging but realistic error scenario."
+            )
+
+        # Update the UI to show active errors
+        self.update_error_display()
+
+    def apply_error_settings(self):
+        """Apply current error settings and update the description"""
+        error_text = "Active Errors:\n"
+        active_errors = self.get_active_errors()
+
+        if not active_errors:
+            error_text = "No errors selected. The simulation will run without introducing artificial errors."
+        else:
+            for error_type in active_errors:
+                if error_type == 'cell_variability':
+                    error_text += "• Cell Variability: Increased variability in cell responses\n"
+                elif error_type == 'dye_loading':
+                    error_text += "• Dye Loading Issues: Problems with calcium dye loading\n"
+                elif error_type == 'cell_health':
+                    error_text += "• Cell Health Problems: Unhealthy cells with altered responses\n"
+                elif error_type == 'cell_density':
+                    error_text += "• Variable Cell Density: Uneven cell distribution\n"
+                elif error_type == 'reagent_stability':
+                    error_text += "• Reagent Stability Issues: Degraded reagents\n"
+                elif error_type == 'reagent_concentration':
+                    error_text += "• Incorrect Concentrations: Pipetting errors\n"
+                elif error_type == 'reagent_contamination':
+                    error_text += "• Reagent Contamination: Contaminated reagents\n"
+                elif error_type == 'camera_errors':
+                    error_text += "• Camera Errors: Camera artifacts and errors\n"
+                elif error_type == 'liquid_handler':
+                    error_text += "• Liquid Handler Issues: Inaccurate dispensing\n"
+                elif error_type == 'timing_errors':
+                    error_text += "• Timing Inconsistencies: Timing issues\n"
+                elif error_type == 'focus_problems':
+                    error_text += "• Focus Problems: Focus issues affecting signal\n"
+                elif error_type == 'edge_effects':
+                    error_text += "• Edge Effects: Plate edge effects\n"
+                elif error_type == 'temperature_gradient':
+                    error_text += "• Temperature Gradients: Temperature variations\n"
+                elif error_type == 'evaporation':
+                    error_text += "• Evaporation: Evaporation effects\n"
+                elif error_type == 'well_crosstalk':
+                    error_text += "• Well Crosstalk: Optical crosstalk between wells\n"
+
+            error_text += f"\nError Probability: {self.error_probability_spin.value()}\n"
+            error_text += f"Error Intensity: {self.error_intensity_spin.value()}\n"
+            error_text += "\nThese errors will be applied in the next simulation run."
+
+        self.error_description.setText(error_text)
+        self.update_error_display()
+
+        # Set the error preset combo back to "Custom Settings"
+        self.error_preset_combo.setCurrentText("Custom Settings")
+
+        # Log the applied errors
+        self.debug_console.append_message(f"Applied error settings with {len(active_errors)} active errors")
+
+    def clear_error_settings(self, update_ui=True):
+        """Clear all error settings"""
+        # Uncheck all error checkboxes
+        for attr_name in dir(self):
+            if attr_name.endswith('_check') and isinstance(getattr(self, attr_name), QCheckBox):
+                getattr(self, attr_name).setChecked(False)
+
+        # Reset probability and intensity
+        self.error_probability_spin.setValue(0.5)
+        self.error_intensity_spin.setValue(0.5)
+
+        if update_ui:
+            # Update description
+            self.error_description.setText(
+                "No errors selected. The simulation will run without introducing artificial errors."
+            )
+
+            # Update the error display
+            self.update_error_display()
+
+            # Set the error preset combo to "Custom Settings"
+            self.error_preset_combo.setCurrentText("Custom Settings")
+
+            # Log
+            self.debug_console.append_message("Cleared all error settings")
+
+    def get_active_errors(self):
+        """Get a dictionary of active error types and their settings"""
+        active_errors = {}
+
+        # Map checkbox attributes to error model names
+        error_map = {
+            'cell_variability_check': 'cell_variability',
+            'dye_loading_check': 'dye_loading',
+            'cell_health_check': 'cell_health',
+            'cell_density_check': 'cell_density',
+            'reagent_stability_check': 'reagent_stability',
+            'reagent_concentration_check': 'reagent_concentration',
+            'reagent_contamination_check': 'reagent_contamination',
+            'camera_error_check': 'camera_errors',
+            'liquid_handler_check': 'liquid_handler',
+            'timing_error_check': 'timing_errors',
+            'focus_error_check': 'focus_problems',
+            'edge_effect_check': 'edge_effects',
+            'temperature_check': 'temperature_gradient',
+            'evaporation_check': 'evaporation',
+            'well_crosstalk_check': 'well_crosstalk'
+        }
+
+        # Get probability and intensity values
+        probability = self.error_probability_spin.value()
+        intensity = self.error_intensity_spin.value()
+
+        # Check which errors are enabled
+        for checkbox_name, error_name in error_map.items():
+            if hasattr(self, checkbox_name) and getattr(self, checkbox_name).isChecked():
+                active_errors[error_name] = {
+                    'active': True,
+                    'probability': probability,
+                    'intensity': intensity
+                }
+
+                # Special case for temperature gradient
+                if error_name == 'temperature_gradient':
+                    active_errors[error_name]['pattern'] = 'left-to-right'
+
+        return active_errors
+
+    def update_error_display(self):
+        """Update the error visualization"""
+        try:
+            # Clear the entire figure first to remove old colorbars
+            self.error_canvas.fig.clear()
+
+            # Create a new axis
+            ax = self.error_canvas.fig.add_subplot(111)
+
+            active_errors = self.get_active_errors()
+
+            if not active_errors:
+                # Show a placeholder message
+                ax.text(0.5, 0.5, 'No errors selected',
+                        ha='center', va='center',
+                        transform=ax.transAxes,
+                        fontsize=14)
+                ax.set_axis_off()
+                self.error_canvas.draw()
+                return
+
+            # Create a plate visualization showing which wells would be affected
+            plate = np.zeros((8, 12))
+
+            # Apply error probability to simulate which wells would be affected
+            for error_type, settings in active_errors.items():
+                probability = settings['probability']
+
+                if error_type == 'edge_effects':
+                    # Edge effects primarily affect outer wells
+                    for i in range(8):
+                        for j in range(12):
+                            if i == 0 or i == 7 or j == 0 or j == 11:  # Edge wells
+                                if np.random.random() < probability:
+                                    plate[i, j] += 1
+
+                elif error_type == 'temperature_gradient':
+                    # Temperature gradient affects wells based on position
+                    pattern = settings.get('pattern', 'left-to-right')
+
+                    if pattern == 'left-to-right':
+                        # Gradient from left to right
+                        for i in range(8):
+                            for j in range(12):
+                                if np.random.random() < probability * (j+1)/12:
+                                    plate[i, j] += 0.5
+
+                    elif pattern == 'center-to-edge':
+                        # Gradient from center to edge
+                        center_i, center_j = 3.5, 5.5
+                        for i in range(8):
+                            for j in range(12):
+                                dist = np.sqrt((i - center_i)**2 + (j - center_j)**2)
+                                max_dist = np.sqrt(center_i**2 + center_j**2)
+                                if np.random.random() < probability * dist/max_dist:
+                                    plate[i, j] += 0.5
+
+                else:
+                    # Other errors affect wells randomly based on probability
+                    for i in range(8):
+                        for j in range(12):
+                            if np.random.random() < probability:
+                                plate[i, j] += 0.75
+
+            # Normalize plate values
+            if np.max(plate) > 0:
+                plate = plate / np.max(plate)
+
+            # Create heatmap
+            im = ax.imshow(plate, cmap='YlOrRd', interpolation='nearest')
+            self.error_canvas.fig.colorbar(im, ax=ax, label='Error Probability')
+
+            # Add well labels
+            for i in range(8):
+                for j in range(12):
+                    ax.text(j, i, f"{chr(65+i)}{j+1}", ha='center', va='center',
+                                       color='black', fontsize=8)
+
+            # Set title and labels
+            active_error_count = len(active_errors)
+            ax.set_title(f'Error Distribution ({active_error_count} active error types)')
+
+            # Refresh canvas
+            self.error_canvas.draw()
+
+        except Exception as e:
+            self.debug_console.append_message(f"Error updating error display: {str(e)}", level='ERROR')
 
     def create_batch_processing_tab(self):
         """Create the batch processing tab"""
@@ -1697,6 +2127,195 @@ class MainWindow(QMainWindow):
             self.debug_console.append_message(f"Error plotting single trace: {str(e)}", level='ERROR')
             logger.error(f"Error plotting single trace: {str(e)}", exc_info=True)
 
+    def run_error_comparison(self):
+        """Run two simulations - one normal and one with errors - and compare the results"""
+        try:
+            # Get current configuration
+            config = self.get_simulation_config()
+
+            # Check if there are active errors
+            if 'active_errors' not in config or not config['active_errors']:
+                QMessageBox.warning(self, "No Errors Selected",
+                                  "Please select at least one error type to run a comparison.")
+                return
+
+            # Create a copy of the config without errors
+            normal_config = config.copy()
+            if 'active_errors' in normal_config:
+                del normal_config['active_errors']
+
+            # Show status
+            self.statusBar().showMessage("Running error comparison simulations...")
+            self.debug_console.append_message("Starting error comparison simulation")
+
+            # Run normal simulation
+            self.debug_console.append_message("Running normal simulation...")
+            normal_results = self.simulation_engine.simulate(normal_config)
+
+            # Run simulation with errors
+            self.debug_console.append_message("Running simulation with errors...")
+            error_results = self.simulation_engine.simulate(config)
+
+            # Create comparison plot
+            self.debug_console.append_message("Creating comparison plot...")
+            self.plot_error_comparison(normal_results, error_results)
+
+            # Update status
+            self.statusBar().showMessage("Error comparison completed")
+            self.debug_console.append_message("Error comparison completed")
+
+        except Exception as e:
+            self.debug_console.append_message(f"Error running comparison: {str(e)}", level='ERROR')
+            logger.error(f"Error running comparison: {str(e)}", exc_info=True)
+            QMessageBox.critical(self, "Error", f"Failed to run comparison: {str(e)}")
+
+    # Add a method to plot the error comparison
+
+    def plot_error_comparison(self, normal_results, error_results):
+        """Plot a comparison of normal vs error-affected results"""
+        try:
+            # Switch to the simulation tab to show the result
+            self.tabs.setCurrentIndex(0)
+
+            # Clear the canvas
+            self.canvas.axes.clear()
+
+            # Get required data
+            if not normal_results or not error_results:
+                return
+
+            time_points = normal_results['time_points']
+            normal_data = normal_results['plate_data']
+            error_data = error_results['plate_data']
+
+            # Create a 2x2 grid of subplots
+            gs = self.canvas.fig.add_gridspec(2, 2)
+
+            # Top-left: Example well comparison (find a well with significant difference)
+            ax1 = self.canvas.fig.add_subplot(gs[0, 0])
+
+            # Find a well that shows significant difference
+            diff_scores = []
+            for i in range(len(normal_data)):
+                if i < len(error_data):
+                    # Calculate difference score (sum of squared differences)
+                    diff = np.sum((normal_data[i] - error_data[i])**2)
+                    diff_scores.append((i, diff))
+
+            # Sort by difference score and pick the well with the most significant difference
+            diff_scores.sort(key=lambda x: x[1], reverse=True)
+            if diff_scores:
+                example_well_idx = diff_scores[0][0]
+                well_id = "Unknown"
+
+                # Get well ID from metadata
+                if 'metadata' in normal_results and example_well_idx < len(normal_results['metadata']):
+                    well_id = normal_results['metadata'][example_well_idx].get('well_id', "Unknown")
+                    cell_line = normal_results['metadata'][example_well_idx].get('cell_line', "Unknown")
+                    agonist = normal_results['metadata'][example_well_idx].get('agonist', "Unknown")
+
+                # Plot this well for normal and error
+                ax1.plot(time_points, normal_data[example_well_idx], 'b-', label='Normal', linewidth=2)
+                ax1.plot(time_points, error_data[example_well_idx], 'r-', label='With Errors', linewidth=2)
+
+                # Mark agonist addition time
+                if 'params' in normal_results and 'agonist_addition_time' in normal_results['params']:
+                    agonist_time = normal_results['params']['agonist_addition_time']
+                    ax1.axvline(x=agonist_time, color='k', linestyle='--')
+
+                ax1.set_title(f'Well {well_id}: Normal vs Error', fontsize=10)
+                ax1.set_xlabel('Time (s)')
+                ax1.set_ylabel('Fluorescence (A.U.)')
+                ax1.legend(fontsize=8)
+
+            # Top-right: Box plot of peak responses
+            ax2 = self.canvas.fig.add_subplot(gs[0, 1])
+
+            # Calculate peak responses for both datasets
+            normal_peaks = []
+            error_peaks = []
+
+            # Get agonist addition time
+            if 'params' in normal_results and 'agonist_addition_time' in normal_results['params']:
+                agonist_time = normal_results['params']['agonist_addition_time']
+                time_idx = int(agonist_time / normal_results['params']['time_interval'])
+
+                for i in range(len(normal_data)):
+                    if i < len(normal_results['metadata']) and i < len(error_data):
+                        if normal_results['metadata'][i].get('valid', True):
+                            # Calculate baseline and peak for normal
+                            baseline = np.mean(normal_data[i][:time_idx]) if time_idx > 0 else normal_data[i][0]
+                            peak = np.max(normal_data[i][time_idx:])
+                            normal_peaks.append(peak - baseline)
+
+                            # Calculate baseline and peak for error
+                            baseline = np.mean(error_data[i][:time_idx]) if time_idx > 0 else error_data[i][0]
+                            peak = np.max(error_data[i][time_idx:])
+                            error_peaks.append(peak - baseline)
+
+            # Create box plots
+            if normal_peaks and error_peaks:
+                box_data = [normal_peaks, error_peaks]
+                ax2.boxplot(box_data, labels=['Normal', 'With Errors'])
+                ax2.set_title('Peak Response Comparison', fontsize=10)
+                ax2.set_ylabel('Peak Response (F-F0)')
+
+                # Add percent difference annotation
+                normal_mean = np.mean(normal_peaks)
+                error_mean = np.mean(error_peaks)
+                pct_diff = ((error_mean - normal_mean) / normal_mean) * 100
+
+                ax2.annotate(f'Mean Difference: {pct_diff:.1f}%',
+                           xy=(1.5, max(np.max(normal_peaks), np.max(error_peaks))),
+                           xytext=(0, -20), textcoords='offset points',
+                           ha='center', fontsize=8)
+
+            # Bottom: All traces overlay
+            ax3 = self.canvas.fig.add_subplot(gs[1, :])
+
+            # Plot a subset of traces for clarity
+            max_traces = 30  # Max number of traces to plot
+            step = max(1, len(normal_data) // max_traces)
+
+            for i in range(0, len(normal_data), step):
+                if i < len(error_data):
+                    ax3.plot(time_points, normal_data[i], 'b-', alpha=0.2, linewidth=0.5)
+                    ax3.plot(time_points, error_data[i], 'r-', alpha=0.2, linewidth=0.5)
+
+            # Add legend lines with higher opacity
+            ax3.plot([], [], 'b-', label='Normal', linewidth=2)
+            ax3.plot([], [], 'r-', label='With Errors', linewidth=2)
+
+            # Mark agonist addition time
+            if 'params' in normal_results and 'agonist_addition_time' in normal_results['params']:
+                agonist_time = normal_results['params']['agonist_addition_time']
+                ax3.axvline(x=agonist_time, color='k', linestyle='--')
+
+            # Get active error types for title
+            error_types = []
+            if 'active_errors' in error_results['params']:
+                error_types = list(error_results['params']['active_errors'].keys())
+
+            if error_types:
+                ax3.set_title(f'All Traces: {", ".join(error_types)}', fontsize=10)
+            else:
+                ax3.set_title('All Traces: Normal vs With Errors', fontsize=10)
+
+            ax3.set_xlabel('Time (s)')
+            ax3.set_ylabel('Fluorescence (A.U.)')
+            ax3.legend(fontsize=8)
+
+            # Adjust layout
+            self.canvas.fig.tight_layout()
+            self.canvas.draw()
+
+            # Also store these results for later reference
+            self.last_normal_results = normal_results
+            self.last_error_results = error_results
+
+        except Exception as e:
+            self.debug_console.append_message(f"Error plotting comparison: {str(e)}", level='ERROR')
+            logger.error(f"Error plotting comparison: {str(e)}", exc_info=True)
 
 
 if __name__ == "__main__":
