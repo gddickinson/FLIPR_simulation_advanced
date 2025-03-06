@@ -19,6 +19,7 @@ from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as Navigatio
 from matplotlib.figure import Figure
 
 import json
+import re
 
 # Import simulation modules
 from simulation_engine import SimulationEngine
@@ -158,7 +159,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.create_simulation_tab(), "Simulation")
         self.tabs.addTab(self.create_plate_layout_tab(), "Plate Layout")
         self.tabs.addTab(self.create_error_simulation_tab(), "Error Simulation")
-        self.tabs.addTab(self.create_batch_processing_tab(), "Batch Processing")
+        #self.tabs.addTab(self.create_batch_processing_tab(), "Batch Processing")
         self.tabs.addTab(self.create_debug_tab(), "Debug Console")
         self.tabs.addTab(self.create_settings_tab(), "Settings")
 
@@ -349,7 +350,7 @@ class MainWindow(QMainWindow):
         viz_layout.addWidget(self.toolbar)
         viz_layout.addWidget(self.canvas, 1)  # Give it a stretch factor of 1
 
-        # Plot control buttons
+        #plot control buttons
         plot_control_layout = QHBoxLayout()
 
         self.plot_type_combo = QComboBox()
@@ -359,9 +360,14 @@ class MainWindow(QMainWindow):
         self.export_plot_btn = QPushButton("Export Plot")
         self.export_plot_btn.clicked.connect(self.export_plot)
 
+        self.export_data_btn = QPushButton("Export Data")
+        self.export_data_btn.clicked.connect(self.export_simulation_data)
+        self.export_data_btn.setEnabled(False)  # Will be enabled after simulation runs
+
         plot_control_layout.addWidget(QLabel("Plot Type:"))
         plot_control_layout.addWidget(self.plot_type_combo)
         plot_control_layout.addWidget(self.export_plot_btn)
+        plot_control_layout.addWidget(self.export_data_btn)
         plot_control_layout.addStretch()
 
         viz_layout.addLayout(plot_control_layout)
@@ -755,7 +761,6 @@ class MainWindow(QMainWindow):
             logger.error(f"Error plotting heatmap: {str(e)}", exc_info=True)
 
 
-
     def simulation_completed(self, results):
         """Handle simulation completion"""
         self.debug_console.append_message("Simulation completed successfully")
@@ -763,6 +768,10 @@ class MainWindow(QMainWindow):
 
         # Store results for later use
         self.last_results = results
+
+        # Enable export button
+        if hasattr(self, 'export_data_btn'):
+            self.export_data_btn.setEnabled(True)
 
         # Plot results based on current plot type
         plot_type = self.plot_type_combo.currentText()
@@ -774,6 +783,10 @@ class MainWindow(QMainWindow):
             self.plot_by_agonist(results)
         elif plot_type == "Heatmap":
             self.plot_heatmap(results)
+
+        # Auto-save if enabled
+        if hasattr(self, 'auto_save') and self.auto_save.isChecked():
+            self.export_simulation_data()
 
     def save_configuration(self):
         """Save current configuration"""
@@ -2243,19 +2256,19 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.debug_console.append_message(f"Error updating error display: {str(e)}", level='ERROR')
 
-    def create_batch_processing_tab(self):
-        """Create the batch processing tab"""
-        tab = QWidget()
-        layout = QVBoxLayout()
+    # def create_batch_processing_tab(self):
+    #     """Create the batch processing tab"""
+    #     tab = QWidget()
+    #     layout = QVBoxLayout()
 
-        # TODO: Implement batch processing interface
-        placeholder = QLabel("Batch Processing will be implemented here")
-        placeholder.setAlignment(Qt.AlignCenter)
+    #     # TODO: Implement batch processing interface
+    #     placeholder = QLabel("Batch Processing will be implemented here")
+    #     placeholder.setAlignment(Qt.AlignCenter)
 
-        layout.addWidget(placeholder)
-        tab.setLayout(layout)
+    #     layout.addWidget(placeholder)
+    #     tab.setLayout(layout)
 
-        return tab
+    #     return tab
 
     def create_settings_tab(self):
         """Create the settings tab"""
@@ -2265,39 +2278,53 @@ class MainWindow(QMainWindow):
         # Application settings form
         settings_form = QFormLayout()
 
-        output_dir = QLineEdit()
+        # Output directory setting
+        self.output_dir_edit = QLineEdit(os.path.join(os.getcwd(), "simulation_results"))
         output_dir_btn = QPushButton("Browse...")
+        output_dir_btn.clicked.connect(self.browse_output_directory)
 
         output_dir_layout = QHBoxLayout()
-        output_dir_layout.addWidget(output_dir)
+        output_dir_layout.addWidget(self.output_dir_edit)
         output_dir_layout.addWidget(output_dir_btn)
 
         settings_form.addRow("Output Directory:", output_dir_layout)
 
-        default_format_combo = QComboBox()
-        default_format_combo.addItems(["CSV", "Excel"])
-        settings_form.addRow("Default Output Format:", default_format_combo)
+        # Default format setting
+        self.default_format_combo = QComboBox()
+        self.default_format_combo.addItems(["CSV", "Excel"])
+        settings_form.addRow("Default Output Format:", self.default_format_combo)
 
-        auto_save = QCheckBox("Auto-save Results")
-        settings_form.addRow("", auto_save)
+        # Autosave setting
+        self.auto_save = QCheckBox("Auto-save Results")
+        self.auto_save.setToolTip("Automatically save results after each simulation")
+        settings_form.addRow("", self.auto_save)
+
+        # File naming options
+        self.file_naming_combo = QComboBox()
+        self.file_naming_combo.addItems(["Timestamp", "Incremental Number", "Custom Prefix"])
+        settings_form.addRow("File Naming Convention:", self.file_naming_combo)
+
+        self.file_prefix_edit = QLineEdit("FLIPR_simulation")
+        settings_form.addRow("Custom Prefix:", self.file_prefix_edit)
 
         # Advanced settings
         advanced_group = QGroupBox("Advanced Settings")
         advanced_layout = QFormLayout()
 
-        num_threads_spin = QSpinBox()
-        num_threads_spin.setRange(1, 16)
-        num_threads_spin.setValue(4)
-        advanced_layout.addRow("Number of Threads:", num_threads_spin)
+        self.num_threads_spin = QSpinBox()
+        self.num_threads_spin.setRange(1, 16)
+        self.num_threads_spin.setValue(4)
+        advanced_layout.addRow("Number of Threads:", self.num_threads_spin)
 
-        random_seed = QSpinBox()
-        random_seed.setRange(0, 9999)
-        random_seed.setValue(42)
+        self.random_seed = QSpinBox()
+        self.random_seed.setRange(0, 9999)
+        self.random_seed.setValue(42)
         random_seed_layout = QHBoxLayout()
-        random_seed_layout.addWidget(random_seed)
-        random_seed_check = QCheckBox("Use Random Seed")
-        random_seed_check.setChecked(True)
-        random_seed_layout.addWidget(random_seed_check)
+        random_seed_layout.addWidget(self.random_seed)
+        self.random_seed_check = QCheckBox("Use Random Seed")
+        self.random_seed_check.setChecked(True)
+        self.random_seed_check.toggled.connect(lambda checked: self.random_seed.setEnabled(not checked))
+        random_seed_layout.addWidget(self.random_seed_check)
 
         advanced_layout.addRow("Random Seed:", random_seed_layout)
 
@@ -2309,12 +2336,85 @@ class MainWindow(QMainWindow):
         layout.addStretch()
 
         # Save button
-        save_btn = QPushButton("Save Settings")
-        layout.addWidget(save_btn)
+        self.save_settings_btn = QPushButton("Save Settings")
+        self.save_settings_btn.clicked.connect(self.save_application_settings)
+        layout.addWidget(self.save_settings_btn)
 
         tab.setLayout(layout)
 
+        # Load settings if they exist
+        self.load_application_settings()
+
         return tab
+
+    def browse_output_directory(self):
+        """Browse for output directory"""
+        dir_path = QFileDialog.getExistingDirectory(self, "Select Output Directory",
+                                              self.output_dir_edit.text())
+
+        if dir_path:
+            self.output_dir_edit.setText(dir_path)
+
+    def save_application_settings(self):
+        """Save application settings to a file"""
+        try:
+            settings = {
+                'output_directory': self.output_dir_edit.text(),
+                'default_format': self.default_format_combo.currentText(),
+                'auto_save': self.auto_save.isChecked(),
+                'file_naming': self.file_naming_combo.currentText(),
+                'file_prefix': self.file_prefix_edit.text(),
+                'num_threads': self.num_threads_spin.value(),
+                'random_seed': self.random_seed.value(),
+                'use_random_seed': self.random_seed_check.isChecked()
+            }
+
+            # Create settings directory if it doesn't exist
+            settings_dir = os.path.join(os.getcwd(), "settings")
+            os.makedirs(settings_dir, exist_ok=True)
+
+            # Save settings to JSON file
+            settings_path = os.path.join(settings_dir, "app_settings.json")
+            with open(settings_path, 'w') as f:
+                json.dump(settings, f, indent=4)
+
+            self.debug_console.append_message(f"Settings saved to {settings_path}")
+            self.statusBar().showMessage("Settings saved successfully", 3000)
+
+        except Exception as e:
+            self.debug_console.append_message(f"Error saving settings: {str(e)}", level='ERROR')
+            QMessageBox.critical(self, "Error", f"Failed to save settings: {str(e)}")
+
+    def load_application_settings(self):
+        """Load application settings from a file"""
+        try:
+            settings_path = os.path.join(os.getcwd(), "settings", "app_settings.json")
+            if os.path.exists(settings_path):
+                with open(settings_path, 'r') as f:
+                    settings = json.load(f)
+
+                # Apply settings to UI elements
+                self.output_dir_edit.setText(settings.get('output_directory', os.path.join(os.getcwd(), "simulation_results")))
+
+                format_index = self.default_format_combo.findText(settings.get('default_format', 'CSV'))
+                if format_index >= 0:
+                    self.default_format_combo.setCurrentIndex(format_index)
+
+                self.auto_save.setChecked(settings.get('auto_save', False))
+
+                naming_index = self.file_naming_combo.findText(settings.get('file_naming', 'Timestamp'))
+                if naming_index >= 0:
+                    self.file_naming_combo.setCurrentIndex(naming_index)
+
+                self.file_prefix_edit.setText(settings.get('file_prefix', 'FLIPR_simulation'))
+                self.num_threads_spin.setValue(settings.get('num_threads', 4))
+                self.random_seed.setValue(settings.get('random_seed', 42))
+                self.random_seed_check.setChecked(settings.get('use_random_seed', True))
+                self.random_seed.setEnabled(not settings.get('use_random_seed', True))
+
+                self.debug_console.append_message("Settings loaded successfully")
+        except Exception as e:
+            self.debug_console.append_message(f"Error loading settings: {str(e)}", level='WARNING')
 
     def run_simulation(self):
         """Run a simulation with the current configuration"""
@@ -2772,6 +2872,142 @@ class MainWindow(QMainWindow):
             self.debug_console.append_message(f"Error plotting comparison: {str(e)}", level='ERROR')
             logger.error(f"Error plotting comparison: {str(e)}", exc_info=True)
 
+
+    def export_simulation_data(self):
+        """Export simulation data to file"""
+        if not hasattr(self, 'last_results') or not self.last_results:
+            QMessageBox.warning(self, "No Data", "No simulation data available to export.")
+            return
+
+        try:
+            # Get export format from settings
+            export_format = self.default_format_combo.currentText() if hasattr(self, 'default_format_combo') else "CSV"
+
+            # Generate filename based on settings
+            file_naming = self.file_naming_combo.currentText() if hasattr(self, 'file_naming_combo') else "Timestamp"
+            prefix = self.file_prefix_edit.text() if hasattr(self, 'file_prefix_edit') else "FLIPR_simulation"
+
+            if file_naming == "Timestamp":
+                filename = f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            elif file_naming == "Incremental Number":
+                # Find the next available number
+                output_dir = self.output_dir_edit.text() if hasattr(self, 'output_dir_edit') else os.path.join(os.getcwd(), "simulation_results")
+                existing_files = [f for f in os.listdir(output_dir) if f.startswith(prefix) and f.endswith(".csv" if export_format == "CSV" else ".xlsx")]
+                next_num = 1
+                for file in existing_files:
+                    match = re.search(r'(\d+)', file)
+                    if match:
+                        num = int(match.group(1))
+                        next_num = max(next_num, num + 1)
+                filename = f"{prefix}_{next_num:03d}"
+            else:  # Custom Prefix only
+                filename = prefix
+
+            # Set output directory
+            output_dir = self.output_dir_edit.text() if hasattr(self, 'output_dir_edit') else os.path.join(os.getcwd(), "simulation_results")
+            os.makedirs(output_dir, exist_ok=True)
+
+            # Export based on format
+            if export_format == "CSV":
+                return self.export_to_csv(output_dir, filename)
+            else:  # Excel
+                return self.export_to_excel(output_dir, filename)
+
+        except Exception as e:
+            self.debug_console.append_message(f"Error exporting data: {str(e)}", level='ERROR')
+            QMessageBox.critical(self, "Export Error", f"Failed to export data: {str(e)}")
+            return False
+
+    def export_to_csv(self, output_dir, filename_base):
+        """Export simulation results to CSV files"""
+        try:
+            # Create main data file - traces for each well
+            data_file = os.path.join(output_dir, f"{filename_base}_traces.csv")
+
+            # Extract data
+            plate_data = self.last_results['plate_data']
+            time_points = self.last_results['time_points']
+            metadata = self.last_results.get('metadata', [])
+
+            # Create a DataFrame with time points as the first column
+            df = pd.DataFrame()
+            df['Time (s)'] = time_points
+
+            # Add each well's data as a column
+            for i, well_data in enumerate(plate_data):
+                well_id = metadata[i].get('well_id', f"Well_{i+1}") if i < len(metadata) else f"Well_{i+1}"
+                df[well_id] = well_data
+
+            # Write to CSV
+            df.to_csv(data_file, index=False)
+
+            # Create metadata file
+            meta_file = os.path.join(output_dir, f"{filename_base}_metadata.csv")
+
+            if metadata:
+                # Create DataFrame from metadata
+                meta_df = pd.DataFrame(metadata)
+                meta_df.to_csv(meta_file, index=False)
+
+            # Create parameters file
+            params_file = os.path.join(output_dir, f"{filename_base}_parameters.json")
+
+            with open(params_file, 'w') as f:
+                json.dump(self.last_results.get('params', {}), f, indent=4, default=str)
+
+            self.debug_console.append_message(f"Data exported to {output_dir}")
+            self.statusBar().showMessage(f"Data exported successfully to {output_dir}", 3000)
+            return True
+
+        except Exception as e:
+            self.debug_console.append_message(f"Error exporting to CSV: {str(e)}", level='ERROR')
+            raise e
+
+    def export_to_excel(self, output_dir, filename_base):
+        """Export simulation results to Excel file"""
+        try:
+            # Create Excel file
+            excel_file = os.path.join(output_dir, f"{filename_base}.xlsx")
+
+            # Create a Pandas Excel writer
+            writer = pd.ExcelWriter(excel_file, engine='openpyxl')
+
+            # Extract data
+            plate_data = self.last_results['plate_data']
+            time_points = self.last_results['time_points']
+            metadata = self.last_results.get('metadata', [])
+
+            # Create traces sheet
+            traces_df = pd.DataFrame()
+            traces_df['Time (s)'] = time_points
+
+            for i, well_data in enumerate(plate_data):
+                well_id = metadata[i].get('well_id', f"Well_{i+1}") if i < len(metadata) else f"Well_{i+1}"
+                traces_df[well_id] = well_data
+
+            traces_df.to_excel(writer, sheet_name='Traces', index=False)
+
+            # Create metadata sheet
+            if metadata:
+                meta_df = pd.DataFrame(metadata)
+                meta_df.to_excel(writer, sheet_name='Metadata', index=False)
+
+            # Create parameters sheet
+            params = self.last_results.get('params', {})
+            params_df = pd.DataFrame([(k, str(v)) for k, v in params.items()],
+                                    columns=['Parameter', 'Value'])
+            params_df.to_excel(writer, sheet_name='Parameters', index=False)
+
+            # Save the Excel file
+            writer.save()
+
+            self.debug_console.append_message(f"Data exported to {excel_file}")
+            self.statusBar().showMessage(f"Data exported successfully to {excel_file}", 3000)
+            return True
+
+        except Exception as e:
+            self.debug_console.append_message(f"Error exporting to Excel: {str(e)}", level='ERROR')
+            raise e
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
