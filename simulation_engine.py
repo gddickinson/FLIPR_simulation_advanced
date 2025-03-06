@@ -306,6 +306,7 @@ class SimulationEngine:
 
         return response
 
+    # In SimulationEngine class
     def _add_realistic_noise(self, signal, read_noise=20, background=100, photobleaching_rate=0.0005):
         """Add realistic noise to the fluorescence signal"""
         # Ensure signal is float
@@ -340,13 +341,13 @@ class SimulationEngine:
             std_dev = np.sqrt(large_values)  # Standard deviation is sqrt(lambda) for Poisson
             noisy_signal[large_mask] = np.random.normal(large_values, std_dev)
 
-        # Read noise (Gaussian)
+        # Read noise (Gaussian) - Make sure we're using the parameter value
         noisy_signal += np.random.normal(0, read_noise, signal.shape)
 
-        # Background noise
+        # Background noise - Make sure we're using the parameter value
         noisy_signal += background
 
-        # Photobleaching
+        # Photobleaching - Make sure we're using the parameter value
         time = np.arange(len(signal))
         photobleaching = np.exp(-photobleaching_rate * time)
         noisy_signal *= photobleaching

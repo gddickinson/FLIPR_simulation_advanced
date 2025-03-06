@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QTabWidget, QWidget,
                             QFileDialog, QMessageBox, QTextEdit, QGroupBox,
                             QFormLayout, QLineEdit, QSplitter, QFrame, QSizePolicy,
                             QTableWidgetItem, QTableWidget, QHeaderView, QGridLayout,
-                            QRadioButton)
+                            QRadioButton, QDialog)
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QThread
 from PyQt5.QtGui import QFont, QIcon, QTextCursor, QColor
 import numpy as np
@@ -273,21 +273,26 @@ class MainWindow(QMainWindow):
         noise_form = QFormLayout()
 
         self.read_noise_spin = QDoubleSpinBox()
-        self.read_noise_spin.setRange(0, 100)
+        self.read_noise_spin.setRange(0, 1000)
         self.read_noise_spin.setValue(20)
         noise_form.addRow("Read Noise:", self.read_noise_spin)
 
         self.background_spin = QDoubleSpinBox()
-        self.background_spin.setRange(0, 500)
+        self.background_spin.setRange(0, 2000)
         self.background_spin.setValue(100)
         noise_form.addRow("Background:", self.background_spin)
 
         self.photobleaching_spin = QDoubleSpinBox()
-        self.photobleaching_spin.setRange(0, 0.01)
+        self.photobleaching_spin.setRange(0, 1.0)
         self.photobleaching_spin.setValue(0.0005)
         self.photobleaching_spin.setDecimals(6)
-        self.photobleaching_spin.setSingleStep(0.0001)
+        self.photobleaching_spin.setSingleStep(0.0005)
         noise_form.addRow("Photobleaching Rate:", self.photobleaching_spin)
+
+        # Add Reset to Defaults button
+        self.reset_noise_btn = QPushButton("Reset to Defaults")
+        self.reset_noise_btn.clicked.connect(self.reset_noise_parameters)
+        noise_form.addRow("", self.reset_noise_btn)
 
         noise_group.setLayout(noise_form)
         control_layout.addWidget(noise_group)
@@ -1493,10 +1498,10 @@ class MainWindow(QMainWindow):
         custom_layout.addWidget(self.use_global_settings_check)
 
 
-        # Preview button
-        self.preview_custom_error_btn = QPushButton("Preview Custom Error")
-        self.preview_custom_error_btn.clicked.connect(self.preview_custom_error)
-        custom_layout.addWidget(self.preview_custom_error_btn)
+        # # Preview button
+        # self.preview_custom_error_btn = QPushButton("Preview Custom Error")
+        # self.preview_custom_error_btn.clicked.connect(self.preview_custom_error)
+        # custom_layout.addWidget(self.preview_custom_error_btn)
 
         custom_layout.addStretch()
         custom_tab.setLayout(custom_layout)
@@ -2316,17 +2321,6 @@ class MainWindow(QMainWindow):
         self.num_threads_spin.setValue(4)
         advanced_layout.addRow("Number of Threads:", self.num_threads_spin)
 
-        self.random_seed = QSpinBox()
-        self.random_seed.setRange(0, 9999)
-        self.random_seed.setValue(42)
-        random_seed_layout = QHBoxLayout()
-        random_seed_layout.addWidget(self.random_seed)
-        self.random_seed_check = QCheckBox("Use Random Seed")
-        self.random_seed_check.setChecked(True)
-        self.random_seed_check.toggled.connect(lambda checked: self.random_seed.setEnabled(not checked))
-        random_seed_layout.addWidget(self.random_seed_check)
-
-        advanced_layout.addRow("Random Seed:", random_seed_layout)
 
         advanced_group.setLayout(advanced_layout)
 
@@ -2364,9 +2358,8 @@ class MainWindow(QMainWindow):
                 'auto_save': self.auto_save.isChecked(),
                 'file_naming': self.file_naming_combo.currentText(),
                 'file_prefix': self.file_prefix_edit.text(),
-                'num_threads': self.num_threads_spin.value(),
-                'random_seed': self.random_seed.value(),
-                'use_random_seed': self.random_seed_check.isChecked()
+                'num_threads': self.num_threads_spin.value()
+                # Removed random seed settings
             }
 
             # Create settings directory if it doesn't exist
@@ -2408,9 +2401,8 @@ class MainWindow(QMainWindow):
 
                 self.file_prefix_edit.setText(settings.get('file_prefix', 'FLIPR_simulation'))
                 self.num_threads_spin.setValue(settings.get('num_threads', 4))
-                self.random_seed.setValue(settings.get('random_seed', 42))
-                self.random_seed_check.setChecked(settings.get('use_random_seed', True))
-                self.random_seed.setEnabled(not settings.get('use_random_seed', True))
+
+                # Removed setting the random seed from here
 
                 self.debug_console.append_message("Settings loaded successfully")
         except Exception as e:
@@ -2725,75 +2717,89 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Error", f"Failed to run comparison: {str(e)}")
 
     # Add a method to plot the error comparison
-
     def plot_error_comparison(self, normal_results, error_results):
-        """Plot a comparison of normal vs error-affected results"""
+        """Plot a comparison of normal vs error-affected results in a popup window"""
         try:
-            # Switch to the simulation tab to show the result
-            self.tabs.setCurrentIndex(0)
+            # Create a new window for the comparison plot
+            self.comparison_window = QDialog(self)
+            self.comparison_window.setWindowTitle("Error Comparison")
+            self.comparison_window.resize(900, 700)  # Set a reasonable size
 
-            # Clear the canvas
-            self.canvas.axes.clear()
+            # Create layout for the window
+            layout = QVBoxLayout()
 
-            # Get required data
-            if not normal_results or not error_results:
-                return
+            # Create matplotlib figure and canvas for the popup
+            figure = Figure(figsize=(9, 7), dpi=100)
+            canvas = FigureCanvas(figure)
+            toolbar = NavigationToolbar(canvas, self.comparison_window)
 
-            time_points = normal_results['time_points']
-            normal_data = normal_results['plate_data']
-            error_data = error_results['plate_data']
+            layout.addWidget(toolbar)
+            layout.addWidget(canvas)
+
+            # Add a close button
+            close_button = QPushButton("Close")
+            close_button.clicked.connect(self.comparison_window.close)
+            layout.addWidget(close_button)
+
+            self.comparison_window.setLayout(layout)
 
             # Create a 2x2 grid of subplots
-            gs = self.canvas.fig.add_gridspec(2, 2)
+            gs = figure.add_gridspec(2, 2)
 
             # Top-left: Example well comparison (find a well with significant difference)
-            ax1 = self.canvas.fig.add_subplot(gs[0, 0])
+            ax1 = figure.add_subplot(gs[0, 0])
 
             # Find a well that shows significant difference
             diff_scores = []
-            for i in range(len(normal_data)):
-                if i < len(error_data):
-                    # Calculate difference score (sum of squared differences)
-                    diff = np.sum((normal_data[i] - error_data[i])**2)
-                    diff_scores.append((i, diff))
+            if normal_results and 'plate_data' in normal_results and 'plate_data' in error_results:
+                normal_data = normal_results['plate_data']
+                error_data = error_results['plate_data']
 
-            # Sort by difference score and pick the well with the most significant difference
-            diff_scores.sort(key=lambda x: x[1], reverse=True)
-            if diff_scores:
-                example_well_idx = diff_scores[0][0]
-                well_id = "Unknown"
+                for i in range(len(normal_data)):
+                    if i < len(error_data):
+                        # Calculate difference score (sum of squared differences)
+                        diff = np.sum((normal_data[i] - error_data[i])**2)
+                        diff_scores.append((i, diff))
 
-                # Get well ID from metadata
-                if 'metadata' in normal_results and example_well_idx < len(normal_results['metadata']):
-                    well_id = normal_results['metadata'][example_well_idx].get('well_id', "Unknown")
-                    cell_line = normal_results['metadata'][example_well_idx].get('cell_line', "Unknown")
-                    agonist = normal_results['metadata'][example_well_idx].get('agonist', "Unknown")
+                # Sort by difference score and pick the well with the most significant difference
+                diff_scores.sort(key=lambda x: x[1], reverse=True)
+                if diff_scores:
+                    example_well_idx = diff_scores[0][0]
+                    well_id = "Unknown"
 
-                # Plot this well for normal and error
-                ax1.plot(time_points, normal_data[example_well_idx], 'b-', label='Normal', linewidth=2)
-                ax1.plot(time_points, error_data[example_well_idx], 'r-', label='With Errors', linewidth=2)
+                    # Get well ID from metadata
+                    if 'metadata' in normal_results and example_well_idx < len(normal_results['metadata']):
+                        well_id = normal_results['metadata'][example_well_idx].get('well_id', "Unknown")
+                        cell_line = normal_results['metadata'][example_well_idx].get('cell_line', "Unknown")
+                        agonist = normal_results['metadata'][example_well_idx].get('agonist', "Unknown")
 
-                # Mark agonist addition time
-                if 'params' in normal_results and 'agonist_addition_time' in normal_results['params']:
-                    agonist_time = normal_results['params']['agonist_addition_time']
-                    ax1.axvline(x=agonist_time, color='k', linestyle='--')
+                    # Plot this well for normal and error
+                    time_points = normal_results['time_points']
+                    ax1.plot(time_points, normal_data[example_well_idx], 'b-', label='Normal', linewidth=2)
+                    ax1.plot(time_points, error_data[example_well_idx], 'r-', label='With Error', linewidth=2)
 
-                ax1.set_title(f'Well {well_id}: Normal vs Error', fontsize=10)
-                ax1.set_xlabel('Time (s)')
-                ax1.set_ylabel('Fluorescence (A.U.)')
-                ax1.legend(fontsize=8)
+                    # Mark agonist addition time
+                    if 'params' in normal_results and 'agonist_addition_time' in normal_results['params']:
+                        agonist_time = normal_results['params']['agonist_addition_time']
+                        ax1.axvline(x=agonist_time, color='k', linestyle='--')
+
+                    ax1.set_title(f'Well {well_id}: Normal vs Error', fontsize=10)
+                    ax1.set_xlabel('Time (s)')
+                    ax1.set_ylabel('Fluorescence (A.U.)')
+                    ax1.legend(fontsize=8)
 
             # Top-right: Box plot of peak responses
-            ax2 = self.canvas.fig.add_subplot(gs[0, 1])
+            ax2 = figure.add_subplot(gs[0, 1])
 
             # Calculate peak responses for both datasets
             normal_peaks = []
             error_peaks = []
 
-            # Get agonist addition time
             if 'params' in normal_results and 'agonist_addition_time' in normal_results['params']:
                 agonist_time = normal_results['params']['agonist_addition_time']
                 time_idx = int(agonist_time / normal_results['params']['time_interval'])
+                normal_data = normal_results['plate_data']
+                error_data = error_results['plate_data']
 
                 for i in range(len(normal_data)):
                     if i < len(normal_results['metadata']) and i < len(error_data):
@@ -2826,45 +2832,57 @@ class MainWindow(QMainWindow):
                            ha='center', fontsize=8)
 
             # Bottom: All traces overlay
-            ax3 = self.canvas.fig.add_subplot(gs[1, :])
+            ax3 = figure.add_subplot(gs[1, :])
 
             # Plot a subset of traces for clarity
             max_traces = 30  # Max number of traces to plot
-            step = max(1, len(normal_data) // max_traces)
+            if 'plate_data' in normal_results and 'plate_data' in error_results:
+                normal_data = normal_results['plate_data']
+                error_data = error_results['plate_data']
+                time_points = normal_results['time_points']
 
-            for i in range(0, len(normal_data), step):
-                if i < len(error_data):
-                    ax3.plot(time_points, normal_data[i], 'b-', alpha=0.2, linewidth=0.5)
-                    ax3.plot(time_points, error_data[i], 'r-', alpha=0.2, linewidth=0.5)
+                step = max(1, len(normal_data) // max_traces)
 
-            # Add legend lines with higher opacity
-            ax3.plot([], [], 'b-', label='Normal', linewidth=2)
-            ax3.plot([], [], 'r-', label='With Errors', linewidth=2)
+                for i in range(0, len(normal_data), step):
+                    if i < len(error_data):
+                        ax3.plot(time_points, normal_data[i], 'b-', alpha=0.2, linewidth=0.5)
+                        ax3.plot(time_points, error_data[i], 'r-', alpha=0.2, linewidth=0.5)
 
-            # Mark agonist addition time
-            if 'params' in normal_results and 'agonist_addition_time' in normal_results['params']:
-                agonist_time = normal_results['params']['agonist_addition_time']
-                ax3.axvline(x=agonist_time, color='k', linestyle='--')
+                # Add legend lines with higher opacity
+                ax3.plot([], [], 'b-', label='Normal', linewidth=2)
+                ax3.plot([], [], 'r-', label='With Errors', linewidth=2)
 
-            # Get active error types for title
-            error_types = []
-            if 'active_errors' in error_results['params']:
-                error_types = list(error_results['params']['active_errors'].keys())
+                # Mark agonist addition time
+                if 'params' in normal_results and 'agonist_addition_time' in normal_results['params']:
+                    agonist_time = normal_results['params']['agonist_addition_time']
+                    ax3.axvline(x=agonist_time, color='k', linestyle='--')
 
-            if error_types:
-                ax3.set_title(f'All Traces: {", ".join(error_types)}', fontsize=10)
-            else:
-                ax3.set_title('All Traces: Normal vs With Errors', fontsize=10)
+                # Get active error types for title
+                error_types = []
+                if 'active_errors' in error_results.get('params', {}):
+                    error_types = list(error_results['params']['active_errors'].keys())
 
-            ax3.set_xlabel('Time (s)')
-            ax3.set_ylabel('Fluorescence (A.U.)')
-            ax3.legend(fontsize=8)
+                if error_types:
+                    ax3.set_title(f'All Traces: {", ".join(error_types)}', fontsize=10)
+                else:
+                    ax3.set_title('All Traces: Normal vs With Errors', fontsize=10)
+
+                ax3.set_xlabel('Time (s)')
+                ax3.set_ylabel('Fluorescence (A.U.)')
+                ax3.legend(fontsize=8)
+
+            # Add some information text
+            figure.text(0.5, 0.01, 'Error comparison shows how selected error types affect calcium signals',
+                       ha='center', fontsize=9)
 
             # Adjust layout
-            self.canvas.fig.tight_layout()
-            self.canvas.draw()
+            figure.tight_layout()
+            canvas.draw()
 
-            # Also store these results for later reference
+            # Show the window
+            self.comparison_window.show()
+
+            # Store for reference
             self.last_normal_results = normal_results
             self.last_error_results = error_results
 
@@ -3008,6 +3026,22 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.debug_console.append_message(f"Error exporting to Excel: {str(e)}", level='ERROR')
             raise e
+
+
+    def reset_noise_parameters(self):
+        """Reset noise parameters to their default values"""
+        try:
+            # Set default values
+            self.read_noise_spin.setValue(20)
+            self.background_spin.setValue(100)
+            self.photobleaching_spin.setValue(0.0005)
+
+            # Show confirmation message
+            self.statusBar().showMessage("Noise parameters reset to defaults", 3000)
+            self.debug_console.append_message("Noise parameters reset to defaults")
+
+        except Exception as e:
+            self.debug_console.append_message(f"Error resetting noise parameters: {str(e)}", level='ERROR')
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

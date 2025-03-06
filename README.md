@@ -1,8 +1,14 @@
 # FLIPR Calcium Response Simulator
 
-A comprehensive Python application for simulating FLIPR (Fluorometric Imaging Plate Reader) calcium signaling data, with support for various cell types, agonists, and error conditions. This simulator is designed to generate realistic calcium response data for testing analysis pipelines and error detection algorithms.
+A comprehensive Python application for simulating FLIPR (Fluorometric Imaging Plate Reader) calcium signaling data, with support for various cell types, agonists, and error conditions. This simulator is designed to generate realistic calcium response data for testing analysis pipelines, validating diagnostic assays, and exploring error detection algorithms.
 
-![FLIPR Simulator Screenshot](docs/images/application_screenshot.png)
+![FLIPR Simulator Screenshot](docs/images/application_screenshot.jpg)
+
+## Overview
+
+The FLIPR Calcium Response Simulator provides a realistic simulation of calcium signaling responses based on published data from autism spectrum disorder research. The application generates time-series fluorescence data that mimics experimental FLIPR readings for different cell types (neurotypical, ASD, FXS, etc.) in response to agonists like ATP.
+
+The software offers a graphical user interface that allows users to design plate layouts, configure simulation parameters, introduce various error conditions, and visualize results. Advanced features include batch processing, error comparison, and data export capabilities.
 
 ## Features
 
@@ -11,6 +17,7 @@ A comprehensive Python application for simulating FLIPR (Fluorometric Imaging Pl
 - Configure multiple cell types with unique response characteristics
 - Implement dose-dependent agonist responses with proper EC50 values
 - Generate complex multi-well plate experiments with various cell types and treatments
+- Adjust noise parameters to create realistic signal variability
 
 ### Interactive Plate Layout Design
 - Design custom plate layouts with different cell types, agonists, and concentrations
@@ -25,6 +32,7 @@ A comprehensive Python application for simulating FLIPR (Fluorometric Imaging Pl
   - Equipment-based errors (camera, liquid handler, timing, focus)
   - Systematic errors (edge effects, temperature, evaporation, crosstalk)
 - Control error probability and intensity
+- Create custom error types with specific parameters
 - Visualize error distribution across the plate
 - Run comparison simulations to see error effects
 
@@ -37,6 +45,12 @@ A comprehensive Python application for simulating FLIPR (Fluorometric Imaging Pl
   - Single Trace: Detailed view of individual wells
 - Interactive well selector grid
 - Export publication-quality plots
+
+### Data Export and Analysis
+- Export simulation data to CSV or Excel formats
+- Configure export settings (file naming, location)
+- Auto-save functionality for batch processing
+- Comprehensive metadata for experiment tracking
 
 ### Debugging and Logging
 - Comprehensive logging system
@@ -58,12 +72,13 @@ pandas>=1.3.0
 matplotlib>=3.4.0
 seaborn>=0.11.0
 PyQt5>=5.15.0
+openpyxl>=3.0.0
 ```
 
 ### Installation Steps
 1. Clone the repository:
    ```
-   git clone https://github.com/yourusername/flipr-simulator.git
+   git clone https://github.com/gddickinson/flipr_simulation_advanced.git
    cd flipr-simulator
    ```
 
@@ -99,13 +114,14 @@ The Simulation tab allows you to run simulations and visualize results:
    - Results will be displayed in the visualization area
 
 3. **Visualization Options**:
-   - Select different plot types from the dropdown
+   - Select different plot types from the dropdown (All Traces, By Cell Line, By Agonist, Heatmap, Single Trace)
    - Use the well selector grid to view individual well responses
    - Export plots for use in presentations or publications
 
-4. **Save/Load Configuration**:
+4. **Save/Load/Export**:
    - Save current configuration for future use
    - Load previously saved configurations
+   - Export simulation data to CSV or Excel
 
 ### Plate Layout Tab
 Design your experimental plate layout:
@@ -133,13 +149,19 @@ Simulate various error conditions:
    - Adjust global error probability and intensity
    - Select from preset error scenarios
 
-2. **Error Visualization**:
+2. **Custom Error Configuration**:
+   - Design custom error patterns
+   - Set specific parameters for each error type
+   - Apply to all wells or specific wells
+   - Option to use global error settings
+
+3. **Error Visualization**:
    - View heat map showing error distribution across the plate
    - See detailed descriptions of active errors
 
-3. **Error Comparison**:
+4. **Error Comparison**:
    - Run comparison simulations (normal vs. with errors)
-   - View side-by-side comparison of error effects
+   - View side-by-side comparison of error effects in a popup window
    - Analyze statistical impact of errors
 
 ### Debug Console Tab
@@ -155,6 +177,21 @@ Monitor application events and troubleshoot issues:
    - Adjust log level
    - Save log to file
 
+### Settings Tab
+Configure global application settings:
+
+1. **Output Settings**:
+   - Set default output directory
+   - Choose default export format (CSV/Excel)
+   - Configure auto-save options
+
+2. **File Naming**:
+   - Set file naming convention (Timestamp, Incremental, Custom)
+   - Configure custom file prefix
+
+3. **Performance Settings**:
+   - Adjust number of threads for calculation
+
 ## Experimental Design
 
 ### Cell Types
@@ -163,6 +200,8 @@ The simulator includes several cell types with different calcium response charac
 - **Neurotypical**: Standard calcium responses with normal kinetics
 - **ASD (Autism Spectrum Disorder)**: Reduced peak responses
 - **FXS (Fragile X Syndrome)**: Reduced peaks with slower decay
+- **Positive Control**: Enhanced response for validation
+- **Negative Control**: Minimal response for baseline comparison
 
 ### Agonists
 Various agonists with different potencies and EC50 values:
@@ -183,38 +222,43 @@ The default 96-well plate layout follows a common experimental design:
 
 This provides triplicate measurements for each agonist, duplicate buffer controls, and testing of all cell lines against all agonists.
 
-## Advanced Features
+## Error Models
 
-### Error Models
-
-#### Cell-Based Errors
+### Cell-Based Errors
 - **Cell Variability**: Introduces increased random variation in cell responses
 - **Dye Loading Issues**: Simulates problems with calcium dye loading, causing reduced signal
 - **Cell Health Problems**: Unhealthy cells with altered baseline and kinetics
 - **Variable Cell Density**: Uneven cell distribution causing signal magnitude differences
 
-#### Reagent-Based Errors
+### Reagent-Based Errors
 - **Reagent Stability Issues**: Degraded reagents with reduced potency
 - **Incorrect Concentrations**: Pipetting errors causing concentration variations
 - **Reagent Contamination**: Contaminated reagents causing unexpected responses
 
-#### Equipment-Based Errors
+### Equipment-Based Errors
 - **Camera Errors**: Simulates dead pixels, saturation, and signal drops
 - **Liquid Handler Issues**: Inaccurate dispensing, timing errors, missed wells
 - **Timing Inconsistencies**: Irregular data acquisition timing
 - **Focus Problems**: Focus issues affecting signal quality
 
-#### Systematic Errors
+### Systematic Errors
 - **Plate Edge Effects**: Edge wells showing different behavior
 - **Temperature Gradients**: Temperature variations across the plate
 - **Evaporation**: Signal drift due to sample evaporation
 - **Well-to-Well Crosstalk**: Optical crosstalk between adjacent wells
 
-### Customizing Cell Lines and Agonists
-You can customize cell lines and agonists in the Plate Layout tab:
-
-1. For cell lines: Use the "Add Cell Line" button to create new cell types with custom parameters
-2. For agonists: Use the "Add Agonist" button to define new agonists with different potencies
+### Custom Errors
+- **Random Spikes**: Add random spikes to traces
+- **Signal Dropouts**: Periods of reduced signal
+- **Baseline Drift**: Rising or falling baseline over time
+- **Oscillating Baseline**: Sinusoidal oscillation in baseline
+- **Signal Cutout**: Complete signal loss for a period
+- **Incomplete Decay**: Signal that doesn't return to baseline
+- **Extra Noise**: Additional random noise
+- **Overlapping Oscillation**: Sinusoidal component added to signal
+- **Sudden Jump**: Abrupt change in signal level
+- **Exponential Drift**: Exponentially increasing/decreasing drift
+- **Delayed Response**: Delayed response to agonist
 
 ## Troubleshooting
 
@@ -237,7 +281,3 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ## Acknowledgments
 - Based on research by Schmunk et al. on calcium signaling in ASD
 - Thanks to the Python scientific computing community
-- Special thanks to Claude for implementation assistance
-
-## Contact
-For questions or support, please contact [youremail@example.com](mailto:youremail@example.com).
