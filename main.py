@@ -7,7 +7,8 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QTabWidget, QWidget,
                             QComboBox, QSpinBox, QDoubleSpinBox, QCheckBox,
                             QFileDialog, QMessageBox, QTextEdit, QGroupBox,
                             QFormLayout, QLineEdit, QSplitter, QFrame, QSizePolicy,
-                            QTableWidgetItem, QTableWidget, QHeaderView, QGridLayout)
+                            QTableWidgetItem, QTableWidget, QHeaderView, QGridLayout,
+                            QRadioButton)
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QThread
 from PyQt5.QtGui import QFont, QIcon, QTextCursor, QColor
 import numpy as np
@@ -1306,9 +1307,16 @@ class MainWindow(QMainWindow):
         # Create a horizontal splitter
         splitter = QSplitter(Qt.Horizontal)
 
-        # Left panel - error controls
+        # Left panel - error controls with tabs for standard and custom errors
         error_panel = QWidget()
         error_layout = QVBoxLayout()
+
+        # Create a tab widget for standard vs custom errors
+        error_tabs = QTabWidget()
+
+        # Standard errors tab
+        standard_tab = QWidget()
+        standard_layout = QVBoxLayout()
 
         # Create error type groups
         # Cell-based errors
@@ -1333,7 +1341,7 @@ class MainWindow(QMainWindow):
         cell_error_layout.addWidget(self.cell_density_check)
 
         cell_error_group.setLayout(cell_error_layout)
-        error_layout.addWidget(cell_error_group)
+        standard_layout.addWidget(cell_error_group)
 
         # Reagent errors
         reagent_error_group = QGroupBox("Reagent-Based Errors")
@@ -1353,7 +1361,7 @@ class MainWindow(QMainWindow):
         reagent_error_layout.addWidget(self.reagent_contamination_check)
 
         reagent_error_group.setLayout(reagent_error_layout)
-        error_layout.addWidget(reagent_error_group)
+        standard_layout.addWidget(reagent_error_group)
 
         # Equipment errors
         equipment_error_group = QGroupBox("Equipment-Based Errors")
@@ -1377,7 +1385,7 @@ class MainWindow(QMainWindow):
         equipment_error_layout.addWidget(self.focus_error_check)
 
         equipment_error_group.setLayout(equipment_error_layout)
-        error_layout.addWidget(equipment_error_group)
+        standard_layout.addWidget(equipment_error_group)
 
         # Systematic errors
         systematic_error_group = QGroupBox("Systematic Errors")
@@ -1401,7 +1409,87 @@ class MainWindow(QMainWindow):
         systematic_error_layout.addWidget(self.well_crosstalk_check)
 
         systematic_error_group.setLayout(systematic_error_layout)
-        error_layout.addWidget(systematic_error_group)
+        standard_layout.addWidget(systematic_error_group)
+
+        standard_tab.setLayout(standard_layout)
+        error_tabs.addTab(standard_tab, "Standard Errors")
+
+        # Custom errors tab
+        custom_tab = QWidget()
+        custom_layout = QVBoxLayout()
+
+        # Custom error enable checkbox
+        self.custom_error_check = QCheckBox("Enable Custom Error")
+        self.custom_error_check.setToolTip("Enable a highly customizable error type")
+        custom_layout.addWidget(self.custom_error_check)
+
+        # Custom error type selector
+        custom_type_layout = QFormLayout()
+        self.custom_error_type = QComboBox()
+        self.custom_error_type.addItems([
+            "Random Spikes",
+            "Signal Dropouts",
+            "Baseline Drift",
+            "Oscillating Baseline",
+            "Signal Cutout",
+            "Incomplete Decay",
+            "Extra Noise",
+            "Overlapping Oscillation",
+            "Sudden Jump",
+            "Exponential Drift",
+            "Delayed Response"
+        ])
+        self.custom_error_type.currentTextChanged.connect(self.update_custom_error_params)
+        custom_type_layout.addRow("Error Type:", self.custom_error_type)
+        custom_layout.addLayout(custom_type_layout)
+
+        # Custom error parameters - will be dynamically updated
+        self.custom_params_group = QGroupBox("Error Parameters")
+        self.custom_params_layout = QFormLayout()
+        self.custom_params_group.setLayout(self.custom_params_layout)
+        custom_layout.addWidget(self.custom_params_group)
+
+        # Well selection for custom error
+        wells_group = QGroupBox("Apply To Wells")
+        wells_layout = QVBoxLayout()
+
+        self.custom_all_wells_radio = QRadioButton("All Wells")
+        self.custom_all_wells_radio.setChecked(True)
+
+        self.custom_specific_wells_radio = QRadioButton("Specific Wells:")
+
+        self.custom_wells_edit = QLineEdit("A1,B2,C3")
+        self.custom_wells_edit.setEnabled(False)
+        self.custom_wells_edit.setToolTip("Comma-separated list of wells (e.g., 'A1,B2,C3')")
+
+        self.custom_specific_wells_radio.toggled.connect(
+            lambda checked: self.custom_wells_edit.setEnabled(checked))
+
+        wells_layout.addWidget(self.custom_all_wells_radio)
+        wells_layout.addWidget(self.custom_specific_wells_radio)
+        wells_layout.addWidget(self.custom_wells_edit)
+
+        wells_group.setLayout(wells_layout)
+        custom_layout.addWidget(wells_group)
+
+
+        # Add the new checkbox for using global error settings
+        self.use_global_settings_check = QCheckBox("Use Global Error Settings")
+        self.use_global_settings_check.setToolTip("Apply global error probability and intensity settings to this custom error")
+        self.use_global_settings_check.setChecked(False)  # Default to unchecked
+        custom_layout.addWidget(self.use_global_settings_check)
+
+
+        # Preview button
+        self.preview_custom_error_btn = QPushButton("Preview Custom Error")
+        self.preview_custom_error_btn.clicked.connect(self.preview_custom_error)
+        custom_layout.addWidget(self.preview_custom_error_btn)
+
+        custom_layout.addStretch()
+        custom_tab.setLayout(custom_layout)
+        error_tabs.addTab(custom_tab, "Custom Errors")
+
+        error_layout.addWidget(error_tabs)
 
         # Global error settings
         global_settings_group = QGroupBox("Global Error Settings")
@@ -1450,10 +1538,15 @@ class MainWindow(QMainWindow):
         self.apply_errors_btn = QPushButton("Apply Error Settings")
         self.apply_errors_btn.clicked.connect(self.apply_error_settings)
 
+        self.run_comparison_btn = QPushButton("Run Error Comparison")
+        self.run_comparison_btn.clicked.connect(self.run_error_comparison)
+        self.run_comparison_btn.setToolTip("Run a comparison between normal and error-affected simulations")
+
         self.clear_errors_btn = QPushButton("Clear All Errors")
         self.clear_errors_btn.clicked.connect(self.clear_error_settings)
 
         button_layout.addWidget(self.apply_errors_btn)
+        button_layout.addWidget(self.run_comparison_btn)
         button_layout.addWidget(self.clear_errors_btn)
         button_layout.addStretch()
 
@@ -1493,7 +1586,334 @@ class MainWindow(QMainWindow):
         # Initialize with all errors disabled
         self.clear_error_settings()
 
+        # Initialize custom error parameters
+        self.update_custom_error_params(self.custom_error_type.currentText())
+
         return tab
+
+    def update_custom_error_params(self, error_type):
+        """Update the custom error parameters based on the selected error type"""
+        # Clear the current parameters by directly getting and removing all widgets
+        for i in reversed(range(self.custom_params_layout.count())):
+            widget = self.custom_params_layout.itemAt(i).widget()
+            if widget is not None:
+                widget.deleteLater()
+                self.custom_params_layout.removeWidget(widget)
+
+        # Add new parameters based on error type
+        if error_type == "Random Spikes":
+            self.num_spikes_spin = QSpinBox()
+            self.num_spikes_spin.setRange(1, 10)
+            self.num_spikes_spin.setValue(3)
+            self.custom_params_layout.addRow("Number of Spikes:", self.num_spikes_spin)
+
+            self.spike_amplitude_spin = QDoubleSpinBox()
+            self.spike_amplitude_spin.setRange(100, 5000)
+            self.spike_amplitude_spin.setValue(1000)
+            self.spike_amplitude_spin.setSingleStep(100)
+            self.custom_params_layout.addRow("Spike Amplitude:", self.spike_amplitude_spin)
+
+            self.spike_width_spin = QSpinBox()
+            self.spike_width_spin.setRange(1, 10)
+            self.spike_width_spin.setValue(3)
+            self.custom_params_layout.addRow("Spike Width:", self.spike_width_spin)
+
+        elif error_type == "Signal Dropouts":
+            self.num_dropouts_spin = QSpinBox()
+            self.num_dropouts_spin.setRange(1, 5)
+            self.num_dropouts_spin.setValue(2)
+            self.custom_params_layout.addRow("Number of Dropouts:", self.num_dropouts_spin)
+
+            self.dropout_length_spin = QSpinBox()
+            self.dropout_length_spin.setRange(5, 50)
+            self.dropout_length_spin.setValue(10)
+            self.custom_params_layout.addRow("Dropout Length:", self.dropout_length_spin)
+
+            self.dropout_factor_spin = QDoubleSpinBox()
+            self.dropout_factor_spin.setRange(0, 0.5)
+            self.dropout_factor_spin.setValue(0.1)
+            self.dropout_factor_spin.setSingleStep(0.05)
+            self.custom_params_layout.addRow("Remaining Signal (%):", self.dropout_factor_spin)
+
+        elif error_type == "Baseline Drift":
+            self.drift_direction_combo = QComboBox()
+            self.drift_direction_combo.addItems(["Rising", "Falling"])
+            self.custom_params_layout.addRow("Drift Direction:", self.drift_direction_combo)
+
+            self.drift_magnitude_spin = QDoubleSpinBox()
+            self.drift_magnitude_spin.setRange(100, 2000)
+            self.drift_magnitude_spin.setValue(500)
+            self.drift_magnitude_spin.setSingleStep(100)
+            self.custom_params_layout.addRow("Drift Magnitude:", self.drift_magnitude_spin)
+
+        elif error_type == "Oscillating Baseline":
+            self.oscillation_freq_spin = QDoubleSpinBox()
+            self.oscillation_freq_spin.setRange(0.01, 0.2)
+            self.oscillation_freq_spin.setValue(0.05)
+            self.oscillation_freq_spin.setSingleStep(0.01)
+            self.oscillation_freq_spin.setDecimals(3)
+            self.custom_params_layout.addRow("Oscillation Frequency:", self.oscillation_freq_spin)
+
+            self.oscillation_amp_spin = QDoubleSpinBox()
+            self.oscillation_amp_spin.setRange(50, 1000)
+            self.oscillation_amp_spin.setValue(300)
+            self.oscillation_amp_spin.setSingleStep(50)
+            self.custom_params_layout.addRow("Oscillation Amplitude:", self.oscillation_amp_spin)
+
+        elif error_type == "Signal Cutout":
+            self.cutout_start_spin = QDoubleSpinBox()
+            self.cutout_start_spin.setRange(0.1, 0.9)
+            self.cutout_start_spin.setValue(0.3)
+            self.cutout_start_spin.setSingleStep(0.05)
+            self.cutout_start_spin.setDecimals(2)
+            self.custom_params_layout.addRow("Start Position (% of trace):", self.cutout_start_spin)
+
+            self.cutout_duration_spin = QDoubleSpinBox()
+            self.cutout_duration_spin.setRange(0.05, 0.5)
+            self.cutout_duration_spin.setValue(0.2)
+            self.cutout_duration_spin.setSingleStep(0.05)
+            self.cutout_duration_spin.setDecimals(2)
+            self.custom_params_layout.addRow("Duration (% of trace):", self.cutout_duration_spin)
+
+            self.replace_baseline_check = QCheckBox("Replace with baseline (otherwise zeros)")
+            self.replace_baseline_check.setChecked(True)
+            self.custom_params_layout.addRow("", self.replace_baseline_check)
+
+        elif error_type == "Incomplete Decay":
+            self.elevation_factor_spin = QDoubleSpinBox()
+            self.elevation_factor_spin.setRange(0.1, 0.9)
+            self.elevation_factor_spin.setValue(0.5)
+            self.elevation_factor_spin.setSingleStep(0.05)
+            self.elevation_factor_spin.setDecimals(2)
+            self.custom_params_layout.addRow("Elevation Factor:", self.elevation_factor_spin)
+
+        elif error_type == "Extra Noise":
+            self.noise_std_spin = QDoubleSpinBox()
+            self.noise_std_spin.setRange(20, 500)
+            self.noise_std_spin.setValue(100)
+            self.noise_std_spin.setSingleStep(10)
+            self.custom_params_layout.addRow("Noise Standard Deviation:", self.noise_std_spin)
+
+        elif error_type == "Overlapping Oscillation":
+            self.overlapping_freq_spin = QDoubleSpinBox()
+            self.overlapping_freq_spin.setRange(0.01, 0.5)
+            self.overlapping_freq_spin.setValue(0.1)
+            self.overlapping_freq_spin.setSingleStep(0.01)
+            self.overlapping_freq_spin.setDecimals(3)
+            self.custom_params_layout.addRow("Oscillation Frequency:", self.overlapping_freq_spin)
+
+            self.overlapping_amp_spin = QDoubleSpinBox()
+            self.overlapping_amp_spin.setRange(50, 1000)
+            self.overlapping_amp_spin.setValue(200)
+            self.overlapping_amp_spin.setSingleStep(50)
+            self.custom_params_layout.addRow("Oscillation Amplitude:", self.overlapping_amp_spin)
+
+            self.phase_shift_spin = QDoubleSpinBox()
+            self.phase_shift_spin.setRange(0, 6.28)
+            self.phase_shift_spin.setValue(0)
+            self.phase_shift_spin.setSingleStep(0.5)
+            self.phase_shift_spin.setDecimals(2)
+            self.custom_params_layout.addRow("Phase Shift (radians):", self.phase_shift_spin)
+
+        elif error_type == "Sudden Jump":
+            self.jump_position_spin = QDoubleSpinBox()
+            self.jump_position_spin.setRange(0.1, 0.9)
+            self.jump_position_spin.setValue(0.7)
+            self.jump_position_spin.setSingleStep(0.05)
+            self.jump_position_spin.setDecimals(2)
+            self.custom_params_layout.addRow("Jump Position (% of trace):", self.jump_position_spin)
+
+            self.jump_magnitude_spin = QDoubleSpinBox()
+            self.jump_magnitude_spin.setRange(-2000, 2000)
+            self.jump_magnitude_spin.setValue(500)
+            self.jump_magnitude_spin.setSingleStep(100)
+            self.custom_params_layout.addRow("Jump Magnitude:", self.jump_magnitude_spin)
+
+        elif error_type == "Exponential Drift":
+            self.exp_direction_combo = QComboBox()
+            self.exp_direction_combo.addItems(["Upward", "Downward"])
+            self.custom_params_layout.addRow("Drift Direction:", self.exp_direction_combo)
+
+            self.exp_magnitude_spin = QDoubleSpinBox()
+            self.exp_magnitude_spin.setRange(100, 3000)
+            self.exp_magnitude_spin.setValue(1000)
+            self.exp_magnitude_spin.setSingleStep(100)
+            self.custom_params_layout.addRow("Maximum Magnitude:", self.exp_magnitude_spin)
+
+            self.exp_rate_spin = QDoubleSpinBox()
+            self.exp_rate_spin.setRange(1, 10)
+            self.exp_rate_spin.setValue(3)
+            self.exp_rate_spin.setSingleStep(0.5)
+            self.exp_rate_spin.setDecimals(1)
+            self.custom_params_layout.addRow("Exponential Rate:", self.exp_rate_spin)
+
+        elif error_type == "Delayed Response":
+            self.delay_time_spin = QDoubleSpinBox()
+            self.delay_time_spin.setRange(1, 20)
+            self.delay_time_spin.setValue(5)
+            self.delay_time_spin.setSingleStep(1)
+            self.delay_time_spin.setDecimals(1)
+            self.custom_params_layout.addRow("Delay Time (seconds):", self.delay_time_spin)
+
+    def preview_custom_error(self):
+        """Generate a preview of the custom error effect"""
+        try:
+            if not hasattr(self, 'simulation_engine'):
+                QMessageBox.warning(self, "Warning", "Simulation engine not initialized.")
+                return
+
+            # Generate a sample calcium response
+            time_points = np.arange(0, 180, 0.4)  # 451 timepoints at 0.4s interval
+
+            # Create a sample params dictionary
+            params = {
+                'time_interval': 0.4,
+                'agonist_addition_time': 10
+            }
+
+            # Create a sample normal calcium response
+            baseline = 500
+            peak = 3000
+            response = np.ones_like(time_points) * baseline
+
+            # Add a peak after agonist addition
+            agonist_idx = int(10 / 0.4)  # 10s divided by 0.4s interval
+            peak_idx = agonist_idx + 10  # Peak 4s after agonist
+
+            # Create rising phase
+            for i in range(agonist_idx, peak_idx + 1):
+                if i < len(response):
+                    progress = (i - agonist_idx) / (peak_idx - agonist_idx)
+                    response[i] = baseline + progress * (peak - baseline)
+
+            # Create decay phase
+            decay_rate = 0.05
+            for i in range(peak_idx + 1, len(response)):
+                time_since_peak = (i - peak_idx) * 0.4
+                response[i] = baseline + (peak - baseline) * np.exp(-decay_rate * time_since_peak)
+
+            # Get custom error parameters based on selected type
+            error_type = self.custom_error_type.currentText()
+            error_params = self.get_custom_error_params()
+
+            # Check if we should use global settings
+            use_global = False
+            if hasattr(self, 'use_global_settings_check'):
+                use_global = self.use_global_settings_check.isChecked()
+
+            # Get global settings if needed
+            if use_global:
+                intensity = self.error_intensity_spin.value()
+                # Update error params with global intensity if needed
+                error_params = self.get_custom_error_params()
+                if 'intensity' in error_params:
+                    error_params['intensity'] = intensity
+
+
+            # Apply the custom error
+            settings = {
+                'custom_type': error_type.lower().replace(' ', '_'),
+                'custom_params': error_params,
+                'use_global_settings': use_global
+            }
+
+            altered_response = self.simulation_engine._apply_custom_error(
+                response, 0, 0, 0, params, settings
+            )
+
+            # Clear the canvas
+            self.error_canvas.axes.clear()
+
+            # Plot original and altered responses
+            self.error_canvas.axes.plot(time_points, response, 'b-', label='Normal', linewidth=2)
+            self.error_canvas.axes.plot(time_points, altered_response, 'r-', label='With Error', linewidth=2)
+
+            # Mark agonist addition
+            self.error_canvas.axes.axvline(x=10, color='k', linestyle='--', label='Agonist Addition')
+
+            # Set labels and title
+            self.error_canvas.axes.set_title(f'Custom Error Preview: {error_type}')
+            self.error_canvas.axes.set_xlabel('Time (s)')
+            self.error_canvas.axes.set_ylabel('Fluorescence (A.U.)')
+            self.error_canvas.axes.legend()
+
+            # Refresh canvas
+            self.error_canvas.draw()
+
+            # Update description
+            self.error_description.setText(
+                f"Custom Error Preview: {error_type}\n\n"
+                f"This shows how the selected custom error would affect a typical calcium response.\n\n"
+                f"Parameters:\n{self.format_error_params(error_params)}\n\n"
+                f"Apply this error by enabling it in the simulation settings."
+            )
+
+        except Exception as e:
+            self.debug_console.append_message(f"Error previewing custom error: {str(e)}", level='ERROR')
+            logger.error(f"Error previewing custom error: {str(e)}", exc_info=True)
+            QMessageBox.critical(self, "Error", f"Failed to preview custom error: {str(e)}")
+
+    def get_custom_error_params(self):
+        """Get the parameter values for the current custom error type"""
+        error_type = self.custom_error_type.currentText()
+        params = {}
+
+        if error_type == "Random Spikes":
+            params['num_spikes'] = self.num_spikes_spin.value()
+            params['amplitude'] = self.spike_amplitude_spin.value()
+            params['width'] = self.spike_width_spin.value()
+
+        elif error_type == "Signal Dropouts":
+            params['num_dropouts'] = self.num_dropouts_spin.value()
+            params['length'] = self.dropout_length_spin.value()
+            params['factor'] = self.dropout_factor_spin.value()
+
+        elif error_type == "Baseline Drift":
+            params['direction'] = self.drift_direction_combo.currentText().lower()
+            params['magnitude'] = self.drift_magnitude_spin.value()
+
+        elif error_type == "Oscillating Baseline":
+            params['frequency'] = self.oscillation_freq_spin.value()
+            params['amplitude'] = self.oscillation_amp_spin.value()
+
+        elif error_type == "Signal Cutout":
+            params['start_pct'] = self.cutout_start_spin.value()
+            params['duration_pct'] = self.cutout_duration_spin.value()
+            params['replace_with_baseline'] = self.replace_baseline_check.isChecked()
+
+        elif error_type == "Incomplete Decay":
+            params['elevation_factor'] = self.elevation_factor_spin.value()
+
+        elif error_type == "Extra Noise":
+            params['std'] = self.noise_std_spin.value()
+
+        elif error_type == "Overlapping Oscillation":
+            params['frequency'] = self.overlapping_freq_spin.value()
+            params['amplitude'] = self.overlapping_amp_spin.value()
+            params['phase_shift'] = self.phase_shift_spin.value()
+
+        elif error_type == "Sudden Jump":
+            params['position_pct'] = self.jump_position_spin.value()
+            params['magnitude'] = self.jump_magnitude_spin.value()
+
+        elif error_type == "Exponential Drift":
+            params['direction'] = self.exp_direction_combo.currentText().lower()
+            params['magnitude'] = self.exp_magnitude_spin.value()
+            params['rate'] = self.exp_rate_spin.value()
+
+        elif error_type == "Delayed Response":
+            params['delay_seconds'] = self.delay_time_spin.value()
+
+        return params
+
+    def format_error_params(self, params):
+        """Format error parameters for display"""
+        result = ""
+        for key, value in params.items():
+            # Convert snake_case to Title Case with spaces
+            display_key = ' '.join(word.capitalize() for word in key.split('_'))
+            result += f"• {display_key}: {value}\n"
+        return result
 
     def apply_error_preset(self, preset_name):
         """Apply a preset error scenario"""
@@ -1632,6 +2052,7 @@ class MainWindow(QMainWindow):
         # Log the applied errors
         self.debug_console.append_message(f"Applied error settings with {len(active_errors)} active errors")
 
+    # Update the clear_error_settings method to include custom errors
     def clear_error_settings(self, update_ui=True):
         """Clear all error settings"""
         # Uncheck all error checkboxes
@@ -1642,6 +2063,13 @@ class MainWindow(QMainWindow):
         # Reset probability and intensity
         self.error_probability_spin.setValue(0.5)
         self.error_intensity_spin.setValue(0.5)
+
+        # Reset custom error settings
+        if hasattr(self, 'custom_all_wells_radio'):
+            self.custom_all_wells_radio.setChecked(True)
+
+        if hasattr(self, 'custom_wells_edit'):
+            self.custom_wells_edit.setText("A1,B2,C3")
 
         if update_ui:
             # Update description
@@ -1658,6 +2086,7 @@ class MainWindow(QMainWindow):
             # Log
             self.debug_console.append_message("Cleared all error settings")
 
+    # Update the get_active_errors method to include custom errors
     def get_active_errors(self):
         """Get a dictionary of active error types and their settings"""
         active_errors = {}
@@ -1697,6 +2126,32 @@ class MainWindow(QMainWindow):
                 # Special case for temperature gradient
                 if error_name == 'temperature_gradient':
                     active_errors[error_name]['pattern'] = 'left-to-right'
+
+        # Add custom error if enabled
+        if hasattr(self, 'custom_error_check') and self.custom_error_check.isChecked():
+            error_type = self.custom_error_type.currentText()
+            error_params = self.get_custom_error_params()
+
+            # Get well selection
+            wells = []
+            if hasattr(self, 'custom_specific_wells_radio') and self.custom_specific_wells_radio.isChecked():
+                well_text = self.custom_wells_edit.text()
+                wells = [w.strip() for w in well_text.split(',') if w.strip()]
+
+            # Check if we should use global settings
+            use_global = False
+            if hasattr(self, 'use_global_settings_check'):
+                use_global = self.use_global_settings_check.isChecked()
+
+            active_errors['custom_error'] = {
+                'active': True,
+                'probability': probability if use_global else 1.0,  # Use global probability if checked, otherwise always apply
+                'intensity': intensity if use_global else self.error_intensity_spin.value(),  # Use global intensity if checked
+                'custom_type': error_type.lower().replace(' ', '_'),
+                'custom_params': error_params,
+                'specific_wells': wells if wells else None,
+                'use_global_settings': use_global  # Add this flag for reference
+            }
 
         return active_errors
 

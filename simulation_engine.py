@@ -53,7 +53,11 @@ class SimulationEngine:
             'edge_effects': self._apply_edge_effects,
             'temperature_gradient': self._apply_temperature_gradient,
             'evaporation': self._apply_evaporation,
-            'well_crosstalk': self._apply_well_crosstalk
+            'well_crosstalk': self._apply_well_crosstalk,
+
+            # Add the custom error model
+            'custom_error': self._apply_custom_error
+
         }
 
         # Default simulation parameters
@@ -1015,3 +1019,229 @@ class SimulationEngine:
 
         # Ensure response is between 0 and 1
         return max(0, min(1, response))
+
+    # new method to handle custom errors
+    def _apply_custom_error(self, response, well, row, col, params, settings):
+        """Apply a custom error with specific parameters to a response"""
+        error_type = settings.get('custom_type', 'random_spikes')
+        error_params = settings.get('custom_params', {})
+        use_global = settings.get('use_global_settings', False)
+        altered_response = response.copy()
+
+        # Apply global intensity if specified
+        if use_global and 'intensity' in params:
+            intensity = params.get('intensity', 0.5)
+            # Update relevant parameters that depend on intensity
+            if error_type == 'random_spikes':
+                error_params['amplitude'] = error_params.get('amplitude', 1000) * intensity
+            elif error_type == 'dropouts':
+                error_params['factor'] = max(0.01, error_params.get('factor', 0.1) * (1 - intensity))
+            elif error_type == 'baseline_drift':
+                error_params['magnitude'] = error_params.get('magnitude', 500) * intensity
+            elif error_type == 'oscillating_baseline':
+                error_params['amplitude'] = error_params.get('amplitude', 300) * intensity
+            elif error_type == 'signal_cutout':
+                error_params['duration_pct'] = min(0.9, error_params.get('duration_pct', 0.2) * intensity)
+            elif error_type == 'incomplete_decay':
+                error_params['elevation_factor'] = error_params.get('elevation_factor', 0.5) * intensity
+            elif error_type == 'extra_noise':
+                error_params['std'] = error_params.get('std', 100) * intensity
+            elif error_type == 'overlapping_oscillation':
+                error_params['amplitude'] = error_params.get('amplitude', 200) * intensity
+            elif error_type == 'sudden_jump':
+                error_params['magnitude'] = error_params.get('magnitude', 500) * intensity
+            elif error_type == 'exponential_drift':
+                error_params['magnitude'] = error_params.get('magnitude', 1000) * intensity
+            elif error_type == 'delayed_response':
+                error_params['delay_seconds'] = min(20, error_params.get('delay_seconds', 5) * intensity)
+
+
+        if error_type == 'random_spikes':
+            # Add random spikes to the trace
+            num_spikes = error_params.get('num_spikes', 3)
+            spike_amplitude = error_params.get('amplitude', 1000)
+            spike_width = error_params.get('width', 3)
+
+            for _ in range(num_spikes):
+                # Choose random position for spike
+                pos = random.randint(0, len(response) - spike_width - 1)
+
+                # Create spike (Gaussian shape)
+                for i in range(spike_width):
+                    # Calculate distance from center of spike (in range -1 to 1)
+                    distance = 2 * (i - spike_width/2) / spike_width
+                    # Apply Gaussian factor
+                    factor = np.exp(-4 * distance**2)
+                    # Add spike
+                    altered_response[pos + i] += spike_amplitude * factor
+
+        elif error_type == 'dropouts':
+            # Add signal dropouts (periods of zero or reduced signal)
+            num_dropouts = error_params.get('num_dropouts', 2)
+            dropout_length = error_params.get('length', 10)
+            dropout_factor = error_params.get('factor', 0.1)  # How much signal remains
+
+            for _ in range(num_dropouts):
+                # Choose random position for dropout
+                pos = random.randint(0, len(response) - dropout_length - 1)
+
+                # Apply dropout
+                for i in range(dropout_length):
+                    altered_response[pos + i] = response[pos + i] * dropout_factor
+
+        elif error_type == 'baseline_drift':
+            # Add rising or falling baseline drift
+            drift_direction = error_params.get('direction', 'rising')
+            drift_magnitude = error_params.get('magnitude', 500)
+
+            # Calculate drift factor for each timepoint
+            drift = np.zeros_like(response)
+            for i in range(len(response)):
+                drift_factor = i / len(response)  # 0 to 1
+                if drift_direction == 'rising':
+                    drift[i] = drift_magnitude * drift_factor
+                else:  # falling
+                    drift[i] = -drift_magnitude * drift_factor
+
+            # Add drift to response
+            altered_response += drift
+
+        elif error_type == 'oscillating_baseline':
+            # Add oscillating baseline
+            frequency = error_params.get('frequency', 0.05)  # cycles per timepoint
+            amplitude = error_params.get('amplitude', 300)
+
+            # Calculate oscillation
+            time = np.arange(len(response))
+            oscillation = amplitude * np.sin(2 * np.pi * frequency * time)
+
+            # Add oscillation
+            altered_response += oscillation
+
+        elif error_type == 'signal_cutout':
+            # Completely remove signal for a period
+            cutout_start = error_params.get('start_pct', 0.3)  # percentage of trace length
+            cutout_duration = error_params.get('duration_pct', 0.2)  # percentage of trace length
+
+            start_idx = int(cutout_start * len(response))
+            duration = int(cutout_duration * len(response))
+            end_idx = min(start_idx + duration, len(response))
+
+            # Replace with baseline or zeros
+            if error_params.get('replace_with_baseline', True):
+                # Use average of first few points as baseline
+                baseline = np.mean(response[:min(10, len(response))])
+                altered_response[start_idx:end_idx] = baseline
+            else:
+                altered_response[start_idx:end_idx] = 0
+
+        elif error_type == 'incomplete_decay':
+            # Response doesn't return to baseline
+            baseline_end = int(params.get('agonist_addition_time', 10) /
+                             params.get('time_interval', 0.4))
+
+            if len(response) > baseline_end + 10:
+                # Find peak after baseline
+                post_addition = response[baseline_end:]
+                peak_idx = np.argmax(post_addition)
+                decay_start_idx = baseline_end + peak_idx
+
+                if decay_start_idx < len(response) - 10:
+                    # Calculate baseline
+                    baseline = np.mean(response[:baseline_end]) if baseline_end > 0 else response[0]
+
+                    # Get elevation factor (how much above baseline the signal stays)
+                    elevation_factor = error_params.get('elevation_factor', 0.5)
+
+                    # Get peak height
+                    peak_height = response[decay_start_idx] - baseline
+
+                    # Calculate incomplete decay
+                    for i in range(decay_start_idx, len(response)):
+                        # Original value
+                        orig_value = response[i]
+                        # How far the original value is from baseline
+                        distance_from_baseline = orig_value - baseline
+                        # Add elevation (more for points closer to baseline)
+                        factor = 1 - (distance_from_baseline / peak_height)
+                        elevation = peak_height * elevation_factor * max(0, factor)
+                        altered_response[i] = orig_value + elevation
+
+        elif error_type == 'extra_noise':
+            # Add extra Gaussian noise to signal
+            noise_std = error_params.get('std', 100)
+
+            # Generate noise
+            noise = np.random.normal(0, noise_std, len(response))
+
+            # Add noise to signal
+            altered_response += noise
+
+        elif error_type == 'overlapping_oscillation':
+            # Add an oscillating signal (like a sine wave) that might represent interference
+            frequency = error_params.get('frequency', 0.1)  # cycles per timepoint
+            amplitude = error_params.get('amplitude', 200)
+            phase_shift = error_params.get('phase_shift', 0)  # in radians
+
+            # Calculate oscillation
+            time = np.arange(len(response))
+            oscillation = amplitude * np.sin(2 * np.pi * frequency * time + phase_shift)
+
+            # Add oscillation
+            altered_response += oscillation
+
+        elif error_type == 'sudden_jump':
+            # Add a sudden jump in the signal
+            jump_position = error_params.get('position_pct', 0.7)  # percentage of trace length
+            jump_magnitude = error_params.get('magnitude', 500)
+
+            # Calculate jump position
+            jump_idx = int(jump_position * len(response))
+
+            # Apply jump to all points after the position
+            altered_response[jump_idx:] += jump_magnitude
+
+        elif error_type == 'exponential_drift':
+            # Add exponential drift to baseline
+            direction = error_params.get('direction', 'upward')
+            magnitude = error_params.get('magnitude', 1000)
+            rate = error_params.get('rate', 3)  # Higher values = faster exponential change
+
+            # Calculate exponential drift
+            time = np.arange(len(response)) / len(response)  # 0 to 1
+            if direction == 'upward':
+                drift = magnitude * (np.exp(rate * time) - 1) / (np.exp(rate) - 1)
+            else:  # downward
+                drift = magnitude * (np.exp(rate * (1 - time)) - 1) / (np.exp(rate) - 1)
+
+            # Add drift
+            altered_response += drift
+
+        elif error_type == 'delayed_response':
+            # Delay the calcium response by a certain amount
+            delay_time = error_params.get('delay_seconds', 5)  # seconds
+            baseline_end = int(params.get('agonist_addition_time', 10) /
+                             params.get('time_interval', 0.4))
+
+            if len(response) > baseline_end:
+                # Calculate delay in timepoints
+                delay_points = int(delay_time / params.get('time_interval', 0.4))
+
+                # Get baseline value
+                baseline = np.mean(response[:baseline_end]) if baseline_end > 0 else response[0]
+
+                # Create new response with delay
+                new_response = np.zeros_like(response)
+                new_response[:baseline_end + delay_points] = baseline
+
+                # Copy the response shape but shifted
+                remaining_points = len(response) - (baseline_end + delay_points)
+                if remaining_points > 0:
+                    points_to_copy = min(remaining_points, len(response) - baseline_end)
+                    new_response[baseline_end + delay_points:baseline_end + delay_points + points_to_copy] = \
+                        response[baseline_end:baseline_end + points_to_copy]
+
+                altered_response = new_response
+
+        return altered_response
+
