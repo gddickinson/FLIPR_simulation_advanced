@@ -11,7 +11,7 @@ from matplotlib.figure import Figure
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                            QGroupBox, QFormLayout, QLabel, QComboBox, QDoubleSpinBox,
                            QSpinBox, QCheckBox, QPushButton, QTabWidget, QTextEdit,
-                           QFileDialog, QMessageBox, QSplitter, QSizePolicy)
+                           QFileDialog, QMessageBox, QSplitter, QSizePolicy, QRadioButton)
 from PyQt5.QtCore import Qt, pyqtSignal, QThread
 from PyQt5.QtGui import QFont, QTextCursor
 from datetime import datetime
@@ -122,14 +122,40 @@ class SimulationThread(QThread):
                 self.config.get('photobleaching_rate', 0.0005)
             )
 
-            # Prepare results
-            results = {
-                'time_points': time_points,
-                'raw_signal': response,
-                'signal': noisy_response,
-                'config': self.config,
-                'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            }
+            if self.config.get('simulate_df_f0', False):
+                # Calculate baseline period
+                baseline_end = int(self.config.get('agonist_addition_time', 10) / self.config.get('time_interval', 0.4))
+                if baseline_end > 0 and baseline_end < len(noisy_response):
+                    # Calculate F0 as mean of baseline period
+                    f0 = np.mean(noisy_response[:baseline_end])
+                    # Calculate DF/F0
+                    if self.config.get('df_f0_as_percent', True):
+                        df_f0_response = ((noisy_response - f0) / f0) * 100  # Express as percentage
+                    else:
+                        df_f0_response = (noisy_response - f0) / f0  # Express as ratio
+
+                    # Store both raw and DF/F0 signals
+                    results = {
+                        'time_points': time_points,
+                        'raw_signal': response,
+                        'signal': noisy_response,
+                        'df_f0_signal': df_f0_response,
+                        'config': self.config,
+                        'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    }
+                else:
+                    # Handle case with insufficient baseline points
+                    self.error_occurred.emit("Insufficient baseline points for DF/F0 calculation")
+                    return
+            else:
+                # Original results without DF/F0
+                results = {
+                    'time_points': time_points,
+                    'raw_signal': response,
+                    'signal': noisy_response,
+                    'config': self.config,
+                    'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                }
 
             logger.info("Simulation completed successfully")
             self.simulation_complete.emit(results)
@@ -505,6 +531,30 @@ class MainWindow(QMainWindow):
         self.decay_rate_spin.setSingleStep(0.01)
         signal_layout.addRow("Decay Rate:", self.decay_rate_spin)
 
+        self.df_f0_check = QCheckBox("Simulate DF/F0 Instead of Raw Fluorescence")
+        self.df_f0_check.setToolTip("When enabled, signals will be calculated as (F-F0)/F0 relative to baseline")
+        signal_layout.addRow("", self.df_f0_check)
+
+        # Connect checkbox to enable/disable format selection
+        self.df_f0_check.stateChanged.connect(lambda state: self.df_f0_format_group.setEnabled(state))
+
+        # Add radio buttons for DF/F0 format selection
+        self.df_f0_format_group = QGroupBox("DF/F0 Format")
+        self.df_f0_format_group.setEnabled(False)  # Initially disabled until DF/F0 is checked
+        df_f0_format_layout = QHBoxLayout()
+
+        self.df_f0_percent_radio = QRadioButton("Percentage (%)")
+        self.df_f0_percent_radio.setChecked(True)  # Default option
+        self.df_f0_percent_radio.setToolTip("Display DF/F0 as percentage (e.g., 10%)")
+
+        self.df_f0_ratio_radio = QRadioButton("Ratio")
+        self.df_f0_ratio_radio.setToolTip("Display DF/F0 as decimal ratio (e.g., 0.1)")
+
+        df_f0_format_layout.addWidget(self.df_f0_percent_radio)
+        df_f0_format_layout.addWidget(self.df_f0_ratio_radio)
+        self.df_f0_format_group.setLayout(df_f0_format_layout)
+        signal_layout.addRow("", self.df_f0_format_group)
+
         # In the create_simulation_tab method, add this to the signal parameters group
         reset_params_btn = QPushButton("Reset Parameters")
         reset_params_btn.setToolTip("Reset parameters to automatic values based on agonist and concentration")
@@ -685,7 +735,7 @@ class MainWindow(QMainWindow):
         delay_layout.addRow("Delayed Response:", self.delayed_response_check)
 
         self.delay_time_spin = QDoubleSpinBox()
-        self.delay_time_spin.setRange(1, 20)
+        self.delay_time_spin.setRange(1, 200)
         self.delay_time_spin.setValue(5)
         self.delay_time_spin.setSingleStep(1)
         delay_layout.addRow("Delay Time (seconds):", self.delay_time_spin)
@@ -1033,6 +1083,8 @@ class MainWindow(QMainWindow):
             'read_noise': self.read_noise_spin.value(),
             'background': self.background_spin.value(),
             'photobleaching_rate': self.photobleaching_spin.value(),
+            'simulate_df_f0': self.df_f0_check.isChecked(),
+            'df_f0_as_percent': self.df_f0_percent_radio.isChecked(),
             'apply_errors': self.apply_errors_check.isChecked(),
             'error_types': {
                 'random_spikes': {
@@ -1153,22 +1205,46 @@ class MainWindow(QMainWindow):
             time_points = results['time_points']
             raw_signal = results['raw_signal']
             signal = results['signal']
+            simulate_df_f0 = results['config'].get('simulate_df_f0', False)
 
-            # Plot raw signal
-            self.canvas.axes.plot(time_points, raw_signal, 'g--', alpha=0.5, label='Ideal Signal')
+            if simulate_df_f0 and 'df_f0_signal' in results:
+                # Plot DF/F0 signal
+                plot_signal = results['df_f0_signal']
+                df_f0_as_percent = results['config'].get('df_f0_as_percent', True)
+                y_label = 'ΔF/F₀ (%)' if df_f0_as_percent else 'ΔF/F₀ (ratio)'
 
-            # Plot full signal with noise
-            self.canvas.axes.plot(time_points, signal, 'b-', label='Simulated Signal')
+                # Calculate DF/F0 for the raw signal too (for the ideal trace)
+                baseline_end = int(results['config']['agonist_addition_time'] / results['config']['time_interval'])
+                if baseline_end > 0 and baseline_end < len(raw_signal):
+                    f0 = np.mean(raw_signal[:baseline_end])
+                    if df_f0_as_percent:
+                        raw_df_f0 = ((raw_signal - f0) / f0) * 100  # As percentage
+                    else:
+                        raw_df_f0 = (raw_signal - f0) / f0  # As ratio
+                    # Plot raw DF/F0 signal
+                    self.canvas.axes.plot(time_points, raw_df_f0, 'g--', alpha=0.5, label='Ideal Signal')
+
+                # Plot full DF/F0 signal with noise
+                self.canvas.axes.plot(time_points, plot_signal, 'b-', label='Simulated Signal')
+            else:
+                # Plot original raw signals
+                self.canvas.axes.plot(time_points, raw_signal, 'g--', alpha=0.5, label='Ideal Signal')
+                self.canvas.axes.plot(time_points, signal, 'b-', label='Simulated Signal')
+                y_label = 'Fluorescence (A.U.)'
 
             # Mark agonist addition time
             agonist_time = results['config']['agonist_addition_time']
             self.canvas.axes.axvline(x=agonist_time, color='r', linestyle='--',
                                    label=f'Agonist Addition ({agonist_time}s)')
 
-            # Calculate and mark baseline and peak
+            # Calculate and mark baseline
             baseline_end = int(agonist_time / results['config']['time_interval'])
             if baseline_end > 0:
-                baseline = np.mean(signal[:baseline_end])
+                if simulate_df_f0 and 'df_f0_signal' in results:
+                    baseline = 0  # Baseline for DF/F0 is zero by definition
+                else:
+                    baseline = np.mean(signal[:baseline_end])
+
                 self.canvas.axes.axhline(y=baseline, color='k', linestyle=':',
                                        label=f'Baseline ({baseline:.1f})')
 
@@ -1178,7 +1254,7 @@ class MainWindow(QMainWindow):
 
             self.canvas.axes.set_title(f'{agonist_type} Response ({concentration} μM)')
             self.canvas.axes.set_xlabel('Time (s)')
-            self.canvas.axes.set_ylabel('Fluorescence (A.U.)')
+            self.canvas.axes.set_ylabel(y_label)
             self.canvas.axes.legend()
 
             # Refresh canvas
@@ -1188,6 +1264,8 @@ class MainWindow(QMainWindow):
             logger.error(f"Error plotting results: {str(e)}", exc_info=True)
             self.debug_console.append_message(f"Error plotting results: {str(e)}", level='ERROR')
 
+
+
     def update_signal_info(self, results):
         """Update the signal information display"""
         try:
@@ -1195,52 +1273,75 @@ class MainWindow(QMainWindow):
             config = results['config']
             time_points = results['time_points']
             signal = results['signal']
+            simulate_df_f0 = config.get('simulate_df_f0', False)
 
             # Calculate statistics
             baseline_end = int(config['agonist_addition_time'] / config['time_interval'])
             if baseline_end > 0:
-                baseline = np.mean(signal[:baseline_end])
-                baseline_std = np.std(signal[:baseline_end])
+                # Calculate appropriate statistics based on signal type
+                if simulate_df_f0 and 'df_f0_signal' in results:
+                    df_f0_signal = results['df_f0_signal']
+                    df_f0_as_percent = config.get('df_f0_as_percent', True)
+                    baseline = 0  # DF/F0 baseline is 0 by definition
+                    baseline_std = np.std(df_f0_signal[:baseline_end])
 
-                # Find peak after agonist addition
-                post_addition = signal[baseline_end:]
-                if len(post_addition) > 0:
-                    peak_value = np.max(post_addition)
-                    peak_idx = baseline_end + np.argmax(post_addition)
-                    peak_time = time_points[peak_idx]
+                    # Find peak after agonist addition
+                    post_addition = df_f0_signal[baseline_end:]
+                    if len(post_addition) > 0:
+                        peak_value = np.max(post_addition)
+                        peak_idx = baseline_end + np.argmax(post_addition)
+                        peak_time = time_points[peak_idx]
 
-                    # Calculate response amplitude
-                    amplitude = peak_value - baseline
+                        # Amplitude is the peak value itself for DF/F0
+                        amplitude = peak_value
 
-                    # Calculate dose-response factor
-                    agonist_type = config['agonist_type']
-                    concentration = config['concentration']
-                    dose_factor = self.calculate_dose_response_factor(agonist_type, concentration)
+                        signal_type = "ΔF/F₀ (%)" if df_f0_as_percent else "ΔF/F₀ (ratio)"
 
-                    # Create information text
-                    info_text = (
-                        f"<b>Agonist:</b> {agonist_type} ({concentration} μM)<br>"
-                        f"<b>Dose-Response Factor:</b> {dose_factor:.3f}<br>"
-                        f"<b>Baseline:</b> {baseline:.1f} ± {baseline_std:.1f}<br>"
-                        f"<b>Peak Value:</b> {peak_value:.1f} at {peak_time:.1f}s<br>"
-                        f"<b>Response Amplitude:</b> {amplitude:.1f}<br>"
-                        f"<b>Rise Rate:</b> {config['rise_rate']:.3f}<br>"
-                        f"<b>Decay Rate:</b> {config['decay_rate']:.3f}"
-                    )
-
-                    # Add error information if applicable
-                    if config['apply_errors']:
-                        active_errors = []
-                        for error_type, error_info in config['error_types'].items():
-                            if error_info.get('enabled', False):
-                                active_errors.append(error_type.replace('_', ' ').title())
-
-                        if active_errors:
-                            info_text += f"<br><b>Active Errors:</b> {', '.join(active_errors)}"
-
-                    self.signal_info_label.setText(info_text)
                 else:
-                    self.signal_info_label.setText("No data after agonist addition.")
+                    # Original raw fluorescence calculations
+                    baseline = np.mean(signal[:baseline_end])
+                    baseline_std = np.std(signal[:baseline_end])
+
+                    # Find peak after agonist addition
+                    post_addition = signal[baseline_end:]
+                    if len(post_addition) > 0:
+                        peak_value = np.max(post_addition)
+                        peak_idx = baseline_end + np.argmax(post_addition)
+                        peak_time = time_points[peak_idx]
+
+                        # Calculate response amplitude
+                        amplitude = peak_value - baseline
+
+                        signal_type = "Fluorescence (A.U.)"
+
+                # Calculate dose-response factor
+                agonist_type = config['agonist_type']
+                concentration = config['concentration']
+                dose_factor = self.calculate_dose_response_factor(agonist_type, concentration)
+
+                # Create information text
+                info_text = (
+                    f"<b>Agonist:</b> {agonist_type} ({concentration} μM)<br>"
+                    f"<b>Dose-Response Factor:</b> {dose_factor:.3f}<br>"
+                    f"<b>Signal Type:</b> {signal_type}<br>"
+                    f"<b>Baseline:</b> {baseline:.1f} ± {baseline_std:.1f}<br>"
+                    f"<b>Peak Value:</b> {peak_value:.1f} at {peak_time:.1f}s<br>"
+                    f"<b>Response Amplitude:</b> {amplitude:.1f}<br>"
+                    f"<b>Rise Rate:</b> {config['rise_rate']:.3f}<br>"
+                    f"<b>Decay Rate:</b> {config['decay_rate']:.3f}"
+                )
+
+                # Add error information if applicable
+                if config['apply_errors']:
+                    active_errors = []
+                    for error_type, error_info in config['error_types'].items():
+                        if error_info.get('enabled', False):
+                            active_errors.append(error_type.replace('_', ' ').title())
+
+                    if active_errors:
+                        info_text += f"<br><b>Active Errors:</b> {', '.join(active_errors)}"
+
+                self.signal_info_label.setText(info_text)
             else:
                 self.signal_info_label.setText("Insufficient data to analyze signal.")
 
@@ -1443,11 +1544,17 @@ class MainWindow(QMainWindow):
                 os.makedirs(os.path.dirname(filename), exist_ok=True)
 
                 # Create DataFrame for export
-                df = pd.DataFrame({
+                df_data = {
                     'Time': self.last_results['time_points'],
                     'Raw_Signal': self.last_results['raw_signal'],
                     'Signal': self.last_results['signal']
-                })
+                }
+
+                # Add DF/F0 data if available
+                if self.last_results['config'].get('simulate_df_f0', False) and 'df_f0_signal' in self.last_results:
+                    df_data['DF_F0_Signal'] = self.last_results['df_f0_signal']
+
+                df = pd.DataFrame(df_data)
 
                 # Export to CSV
                 df.to_csv(filename, index=False)
