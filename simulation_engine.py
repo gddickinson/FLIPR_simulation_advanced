@@ -209,14 +209,58 @@ class SimulationEngine:
 
         logger.info(f"Simulation completed for {rows * cols} wells")
 
-        # Return simulation results
-        return {
+        # Initialize results dictionary
+        results = {
             'plate_data': plate_data,
             'metadata': metadata,
             'params': params,
             'time_points': np.arange(0, total_time, params['time_interval']),
             'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
+
+        # Calculate DF/F0 if requested
+        simulate_df_f0 = params.get('simulate_df_f0', False)
+        if simulate_df_f0:
+            # Calculate F0 for each well
+            df_f0_data = np.zeros_like(plate_data)
+            baseline_end = int(params['agonist_addition_time'] / params['time_interval'])
+
+            for well in range(len(plate_data)):
+                # Only process if we have enough baseline points
+                if baseline_end > 0 and baseline_end < len(plate_data[well]):
+                    # Calculate F0 as mean of baseline period
+                    f0 = np.mean(plate_data[well][:baseline_end])
+
+                    # Avoid division by zero
+                    if f0 > 0:
+                        # Calculate DF/F0
+                        if params.get('df_f0_as_percent', True):
+                            df_f0_data[well] = ((plate_data[well] - f0) / f0) * 100  # Express as percentage
+                        else:
+                            df_f0_data[well] = (plate_data[well] - f0) / f0  # Express as ratio
+                    else:
+                        # If baseline is zero or negative, just set to zeros
+                        df_f0_data[well] = np.zeros_like(plate_data[well])
+                        logger.warning(f"Zero or negative baseline detected in well {well}, unable to calculate DF/F0")
+
+            # Add DF/F0 data to results
+            results['df_f0_data'] = df_f0_data
+
+        #DEBUG
+        if simulate_df_f0:
+            # After calculating df_f0_data
+            logger.info(f"DF/F0 calculation enabled: {'percentage' if params.get('df_f0_as_percent', True) else 'ratio'} mode")
+            logger.info(f"DF/F0 data shape: {df_f0_data.shape}, min: {np.min(df_f0_data)}, max: {np.max(df_f0_data)}")
+
+            # Debug: Check a sample well
+            sample_well = 0
+            baseline_end = int(params['agonist_addition_time'] / params['time_interval'])
+            sample_f0 = np.mean(plate_data[sample_well][:baseline_end])
+            logger.info(f"Sample well F0: {sample_f0}, min: {np.min(plate_data[sample_well])}, max: {np.max(plate_data[sample_well])}")
+            logger.info(f"Sample well DF/F0 min: {np.min(df_f0_data[sample_well])}, max: {np.max(df_f0_data[sample_well])}")
+
+
+        return results
 
     def _create_default_agonist_layout(self, rows, cols, default_agonist='ATP'):
         """Create a default agonist layout with the specified default agonist"""

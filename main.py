@@ -289,6 +289,44 @@ class MainWindow(QMainWindow):
         self.photobleaching_spin.setSingleStep(0.0005)
         noise_form.addRow("Photobleaching Rate:", self.photobleaching_spin)
 
+        # Add DF/F0 settings group
+        df_f0_group = QGroupBox("DF/F0 Settings")
+        df_f0_layout = QVBoxLayout()
+
+        # DF/F0 checkbox
+        self.df_f0_check = QCheckBox("Simulate DF/F0 Instead of Raw Fluorescence")
+        self.df_f0_check.setToolTip("When enabled, signals will be calculated as (F-F0)/F0 relative to baseline")
+        df_f0_layout.addWidget(self.df_f0_check)
+
+        # Format options
+        format_layout = QHBoxLayout()
+        format_layout.addWidget(QLabel("DF/F0 Format:"))
+
+        self.df_f0_percent_radio = QRadioButton("Percentage (%)")
+        self.df_f0_percent_radio.setChecked(True)
+        self.df_f0_percent_radio.setToolTip("Display DF/F0 as percentage (e.g., 10%)")
+
+        self.df_f0_ratio_radio = QRadioButton("Ratio")
+        self.df_f0_ratio_radio.setToolTip("Display DF/F0 as decimal ratio (e.g., 0.1)")
+
+        format_layout.addWidget(self.df_f0_percent_radio)
+        format_layout.addWidget(self.df_f0_ratio_radio)
+        df_f0_layout.addLayout(format_layout)
+
+        # Group only enabled when checkbox is checked
+        self.df_f0_format_group = QGroupBox("Format Options")
+        self.df_f0_format_group.setLayout(format_layout)
+        self.df_f0_format_group.setEnabled(False)
+        df_f0_layout.addWidget(self.df_f0_format_group)
+
+        # Connect checkbox to enable/disable format options
+        self.df_f0_check.stateChanged.connect(lambda state: self.df_f0_format_group.setEnabled(state))
+
+        df_f0_group.setLayout(df_f0_layout)
+        control_layout.addWidget(df_f0_group)
+
+
+
         # Add Reset to Defaults button
         self.reset_noise_btn = QPushButton("Reset to Defaults")
         self.reset_noise_btn.clicked.connect(self.reset_noise_parameters)
@@ -434,6 +472,14 @@ class MainWindow(QMainWindow):
                 config['random_seed'] = self.random_seed_spin.value()
             else:
                 config['random_seed'] = None  # Use different seed each time
+
+            # Add DF/F0 settings if they exist
+            if hasattr(self, 'df_f0_check'):
+                config['simulate_df_f0'] = self.df_f0_check.isChecked()
+
+                # Add DF/F0 format parameter (percentage or ratio)
+                if hasattr(self, 'df_f0_percent_radio'):
+                    config['df_f0_as_percent'] = self.df_f0_percent_radio.isChecked()
 
             # Get the cell line and agonist definitions from config manager
             config['cell_lines'] = self.config_manager.config.get('cell_lines', {})
@@ -778,16 +824,25 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'export_data_btn'):
             self.export_data_btn.setEnabled(True)
 
-        # Plot results based on current plot type
-        plot_type = self.plot_type_combo.currentText()
-        if plot_type == "All Traces":
-            self.plot_results(results)
-        elif plot_type == "By Cell Line":
-            self.plot_by_cell_line(results)
-        elif plot_type == "By Agonist":
-            self.plot_by_agonist(results)
-        elif plot_type == "Heatmap":
-            self.plot_heatmap(results)
+        # Debug the DF/F0 settings before plotting
+        self.debug_ui_settings()
+
+        # Create a custom plotting function that focuses specifically on DF/F0
+        if 'simulate_df_f0' in results['params'] and results['params']['simulate_df_f0'] and 'df_f0_data' in results:
+            self.debug_console.append_message("Using DF/F0 data for plotting")
+            self.plot_df_f0_data(results)
+        else:
+            self.debug_console.append_message("Using raw fluorescence data for plotting")
+            # Use standard plotting
+            plot_type = self.plot_type_combo.currentText()
+            if plot_type == "All Traces":
+                self.plot_results(results)
+            elif plot_type == "By Cell Line":
+                self.plot_by_cell_line(results)
+            elif plot_type == "By Agonist":
+                self.plot_by_agonist(results)
+            elif plot_type == "Heatmap":
+                self.plot_heatmap(results)
 
         # Auto-save if enabled
         if hasattr(self, 'auto_save') and self.auto_save.isChecked():
@@ -2414,8 +2469,16 @@ class MainWindow(QMainWindow):
             # Get configuration from UI
             config = self.get_simulation_config()
 
+            # Debug log the DF/F0 settings
+            if 'simulate_df_f0' in config:
+                logger.info(f"DF/F0 enabled: {config['simulate_df_f0']}")
+                if config['simulate_df_f0']:
+                    logger.info(f"DF/F0 as percent: {config.get('df_f0_as_percent', True)}")
+            else:
+                logger.info("DF/F0 settings not found in config")
+
             # Log simulation start
-            self.debug_console.append_message(f"Starting simulation with {config['num_timepoints']} timepoints")
+            logger.info(f"Starting simulation with {config['num_timepoints']} timepoints")
 
             # Create and start simulation thread
             self.sim_thread = SimulationThread(self.simulation_engine, config)
@@ -2557,7 +2620,7 @@ class MainWindow(QMainWindow):
             # If already in Single Trace mode, just update the plot
             self.show_individual_trace(well_id)
 
-    # Add this new method to the MainWindow class
+
     def show_individual_trace(self, well_id=None):
         """Display a single trace for the selected well"""
         # If no well_id provided, find which one is selected in the grid
@@ -2572,7 +2635,8 @@ class MainWindow(QMainWindow):
         if well_id and hasattr(self, 'last_results'):
             self.plot_single_trace(self.last_results, well_id)
 
-    # Add this new plotting function to the MainWindow class
+
+    # Add this new method to the MainWindow class
     def plot_single_trace(self, results, well_id):
         """Plot a single trace for a specific well"""
         try:
@@ -2601,9 +2665,21 @@ class MainWindow(QMainWindow):
                 self.canvas.draw()
                 return
 
-            # Get data for this well
+            # Get time points
             time_points = results['time_points']
-            well_data = results['plate_data'][well_idx]
+
+            # Check if DF/F0 mode is enabled and data is available
+            simulate_df_f0 = results['params'].get('simulate_df_f0', False)
+            df_f0_as_percent = results['params'].get('df_f0_as_percent', True)
+
+            if simulate_df_f0 and 'df_f0_data' in results:
+                # Use DF/F0 data
+                well_data = results['df_f0_data'][well_idx]
+                y_label = 'ΔF/F₀ (%)' if df_f0_as_percent else 'ΔF/F₀ (ratio)'
+            else:
+                # Use raw fluorescence data
+                well_data = results['plate_data'][well_idx]
+                y_label = 'Fluorescence (A.U.)'
 
             # Get well metadata
             cell_line = well_meta.get('cell_line', 'Unknown')
@@ -2633,9 +2709,15 @@ class MainWindow(QMainWindow):
 
                 # Calculate and mark baseline
                 if agonist_time_idx > 0:
-                    baseline = np.mean(well_data[:agonist_time_idx])
-                    self.canvas.axes.axhline(y=baseline, color='green', linestyle=':',
-                                         label=f'Baseline ({baseline:.1f})')
+                    if simulate_df_f0 and 'df_f0_data' in results:
+                        # In DF/F0 mode, baseline is 0
+                        baseline = 0
+                        self.canvas.axes.axhline(y=baseline, color='green', linestyle=':',
+                                             label=f'Baseline (0)')
+                    else:
+                        baseline = np.mean(well_data[:agonist_time_idx])
+                        self.canvas.axes.axhline(y=baseline, color='green', linestyle=':',
+                                             label=f'Baseline ({baseline:.1f})')
 
                     # Calculate and mark peak
                     if agonist_time_idx < len(well_data):
@@ -2650,18 +2732,28 @@ class MainWindow(QMainWindow):
                                           label=f'Peak ({peak_value:.1f})')
 
                         # Calculate peak response
-                        peak_response = peak_value - baseline
+                        if simulate_df_f0:
+                            # In DF/F0 mode, peak response is the peak value itself
+                            peak_response = peak_value
+                            response_label = y_label
+                        else:
+                            peak_response = peak_value - baseline
+                            response_label = 'Fluorescence (A.U.)'
 
                         # Add annotation
-                        self.canvas.axes.annotate(f'Peak Response: {peak_response:.1f}',
+                        self.canvas.axes.annotate(f'Peak Response: {peak_response:.1f} {response_label}',
                                               xy=(peak_time, peak_value),
                                               xytext=(peak_time + 10, peak_value + 50),
                                               arrowprops=dict(facecolor='black', shrink=0.05, width=1.5))
 
             # Set title and labels
-            self.canvas.axes.set_title(f'Well {well_id}: {cell_line} with {agonist} ({concentration} µM)')
+            title = f'Well {well_id}: {cell_line} with {agonist} ({concentration} µM)'
+            if simulate_df_f0:
+                title += ' - ΔF/F₀ Mode'
+
+            self.canvas.axes.set_title(title)
             self.canvas.axes.set_xlabel('Time (s)')
-            self.canvas.axes.set_ylabel('Fluorescence (A.U.)')
+            self.canvas.axes.set_ylabel(y_label)
             self.canvas.axes.legend()
 
             # Refresh canvas
@@ -3042,6 +3134,112 @@ class MainWindow(QMainWindow):
 
         except Exception as e:
             self.debug_console.append_message(f"Error resetting noise parameters: {str(e)}", level='ERROR')
+
+
+    def debug_ui_settings(self):
+        """Log the current state of UI elements for debugging"""
+        try:
+            logger.info("===== UI Debug Information =====")
+
+            # Check if DF/F0 UI elements exist
+            df_f0_check_exists = hasattr(self, 'df_f0_check')
+            logger.info(f"DF/F0 checkbox exists: {df_f0_check_exists}")
+
+            if df_f0_check_exists:
+                logger.info(f"DF/F0 checkbox checked: {self.df_f0_check.isChecked()}")
+
+                percent_radio_exists = hasattr(self, 'df_f0_percent_radio')
+                ratio_radio_exists = hasattr(self, 'df_f0_ratio_radio')
+
+                logger.info(f"Format radio buttons exist: {percent_radio_exists} and {ratio_radio_exists}")
+
+                if percent_radio_exists and ratio_radio_exists:
+                    logger.info(f"Percentage selected: {self.df_f0_percent_radio.isChecked()}")
+                    logger.info(f"Ratio selected: {self.df_f0_ratio_radio.isChecked()}")
+
+            # Log the structure of the last simulation results
+            if hasattr(self, 'last_results'):
+                logger.info("Last results keys:")
+                for key in self.last_results.keys():
+                    if isinstance(self.last_results[key], np.ndarray):
+                        logger.info(f" - {key}: numpy array of shape {self.last_results[key].shape}")
+                    elif isinstance(self.last_results[key], dict):
+                        logger.info(f" - {key}: dictionary with {len(self.last_results[key])} items")
+                        if key == 'params':
+                            logger.info(f"   - simulate_df_f0: {self.last_results[key].get('simulate_df_f0', 'not found')}")
+                            logger.info(f"   - df_f0_as_percent: {self.last_results[key].get('df_f0_as_percent', 'not found')}")
+                    else:
+                        logger.info(f" - {key}: {type(self.last_results[key])}")
+            else:
+                logger.info("No last_results available")
+
+            logger.info("================================")
+        except Exception as e:
+            logger.error(f"Error in debug_ui_settings: {str(e)}", exc_info=True)
+
+
+    def plot_df_f0_data(self, results):
+        """Special plot function for DF/F0 data to make sure it's being used"""
+        # Clear the canvas
+        self.canvas.axes.clear()
+
+        # Extract necessary data
+        time_points = results['time_points']
+        df_f0_data = results['df_f0_data']
+        metadata = results['metadata']
+        as_percent = results['params'].get('df_f0_as_percent', True)
+
+        # Set y-label based on format
+        y_label = 'ΔF/F₀ (%)' if as_percent else 'ΔF/F₀ (ratio)'
+
+        # Define colors for cell lines
+        cell_line_colors = {
+            'Neurotypical': '#4DAF4A',  # Green
+            'ASD': '#984EA3',           # Purple
+            'FXS': '#FF7F00',           # Orange
+            'Default': '#999999'        # Gray
+        }
+
+        # Plot each well's trace
+        for well_idx, well_data in enumerate(df_f0_data):
+            if well_idx < len(metadata):
+                well_meta = metadata[well_idx]
+
+                # Only plot if well is valid
+                if well_meta.get('valid', True):
+                    cell_line = well_meta.get('cell_line', 'Default')
+                    color = cell_line_colors.get(cell_line, cell_line_colors['Default'])
+
+                    # Plot with semi-transparency
+                    self.canvas.axes.plot(time_points, well_data, color=color, alpha=0.3, linewidth=0.8)
+
+        # Add legend entries for cell lines
+        for cell_line, color in cell_line_colors.items():
+            if cell_line != 'Default':  # Skip default in legend
+                self.canvas.axes.plot([], [], color=color, label=cell_line, linewidth=2)
+
+        # Mark agonist addition time
+        if 'params' in results and 'agonist_addition_time' in results['params']:
+            agonist_time = results['params']['agonist_addition_time']
+            self.canvas.axes.axvline(x=agonist_time, color='black', linestyle='--',
+                                   label=f'Agonist ({agonist_time}s)')
+
+        # Add baseline marker (should be at 0 for DF/F0)
+        self.canvas.axes.axhline(y=0, color='gray', linestyle=':', label='Baseline (0)')
+
+        # Set title and labels
+        title = f'FLIPR Calcium Response: ΔF/F₀ {"%" if as_percent else "ratio"}'
+        self.canvas.axes.set_title(title)
+        self.canvas.axes.set_xlabel('Time (s)')
+        self.canvas.axes.set_ylabel(y_label)
+        self.canvas.axes.legend(loc='upper right')
+
+        # Refresh canvas
+        self.canvas.draw()
+
+        # Log success
+        self.debug_console.append_message(f"Plotted DF/F0 data in {'percentage' if as_percent else 'ratio'} format")
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
