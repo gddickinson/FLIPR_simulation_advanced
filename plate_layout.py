@@ -31,6 +31,7 @@ class PlateLayoutEditor(QWidget):
         self.agonist_layout = None
         self.cell_line_layout = None
         self.cell_id_layout = None
+        self.group_id_layout = None  # New: Add group ID layout
 
         # Initialize UI
         self.init_ui()
@@ -75,8 +76,16 @@ class PlateLayoutEditor(QWidget):
         agonist_layout.addWidget(self.agonist_editor)
         agonist_group.setLayout(agonist_layout)
 
+        # New: Add Group ID layout editor
+        group_id_group = QGroupBox("Group ID Layout")
+        self.group_id_editor = self.create_layout_editor("group_id")
+        group_id_layout = QVBoxLayout()
+        group_id_layout.addWidget(self.group_id_editor)
+        group_id_group.setLayout(group_id_layout)
+
         tab_layout.addWidget(cell_line_group)
         tab_layout.addWidget(agonist_group)
+        tab_layout.addWidget(group_id_group)  # Add the new group ID editor
 
         main_layout.addLayout(tab_layout)
 
@@ -211,6 +220,10 @@ class PlateLayoutEditor(QWidget):
         self.agonist_editor.setRowCount(self.rows)
         self.agonist_editor.setColumnCount(self.cols)
 
+        # Update group ID editor
+        self.group_id_editor.setRowCount(self.rows)
+        self.group_id_editor.setColumnCount(self.cols)
+
         # Set row and column headers
         row_labels = [chr(65 + i) for i in range(self.rows)]
         col_labels = [str(i+1) for i in range(self.cols)]
@@ -221,15 +234,39 @@ class PlateLayoutEditor(QWidget):
         self.agonist_editor.setVerticalHeaderLabels(row_labels)
         self.agonist_editor.setHorizontalHeaderLabels(col_labels)
 
+        self.group_id_editor.setVerticalHeaderLabels(row_labels)
+        self.group_id_editor.setHorizontalHeaderLabels(col_labels)
+
         # Adjust cell sizes
         for i in range(self.rows):
             self.cell_line_editor.setRowHeight(i, 30)
             self.agonist_editor.setRowHeight(i, 30)
+            self.group_id_editor.setRowHeight(i, 30)
 
         for i in range(self.cols):
             width = 60 if self.cols <= 12 else 40
             self.cell_line_editor.setColumnWidth(i, width)
             self.agonist_editor.setColumnWidth(i, width)
+            self.group_id_editor.setColumnWidth(i, width)
+
+    def create_default_group_id_layout(self, rows, cols, default_group='Group A'):
+        """Create a default group ID layout"""
+        layout = np.empty((rows, cols), dtype=object)
+
+        # Initialize with default group
+        layout.fill(default_group)
+
+        # Create a pattern with different groups
+        group_names = ['Group A', 'Group B', 'Group C', 'Group D']
+
+        # Assign groups by columns
+        for j in range(cols):
+            group_idx = j % len(group_names)
+            for i in range(rows):
+                layout[i, j] = group_names[group_idx]
+
+        return layout
+
 
     def on_cell_changed(self, layout_type, row, col):
         """Handle changes to layout cells"""
@@ -242,6 +279,12 @@ class PlateLayoutEditor(QWidget):
             if self.agonist_layout is not None:
                 self.agonist_layout[row, col] = self.agonist_editor.item(row, col).text()
                 self.layout_changed.emit('agonist', self.agonist_layout)
+
+        # New: Handle group_id layout changes
+        elif layout_type == 'group_id':
+            if self.group_id_layout is not None:
+                self.group_id_layout[row, col] = self.group_id_editor.item(row, col).text()
+                self.layout_changed.emit('group_id', self.group_id_layout)
 
     def populate_layout_table(self, table, layout):
         """Populate a layout editor table with values"""
@@ -261,14 +304,17 @@ class PlateLayoutEditor(QWidget):
             self.agonist_layout = self.create_default_agonist_layout(8, 12)
             self.cell_line_layout = self.create_default_cell_line_layout(8, 12)
             self.cell_id_layout = self.create_default_cell_id_layout(8, 12)
+            self.group_id_layout = self.create_default_group_id_layout(8, 12)  # New
         else:  # 384-well
             self.agonist_layout = self.create_default_agonist_layout(16, 24)
             self.cell_line_layout = self.create_default_cell_line_layout(16, 24)
             self.cell_id_layout = self.create_default_cell_id_layout(16, 24)
+            self.group_id_layout = self.create_default_group_id_layout(16, 24)  # New
 
         # Update layout editors
         self.populate_layout_table(self.cell_line_editor, self.cell_line_layout)
         self.populate_layout_table(self.agonist_editor, self.agonist_layout)
+        self.populate_layout_table(self.group_id_editor, self.group_id_layout)  # New
 
         # Update cell line and agonist lists
         self.populate_cell_line_list()
@@ -277,6 +323,7 @@ class PlateLayoutEditor(QWidget):
         # Emit change signals
         self.layout_changed.emit('cell_line', self.cell_line_layout)
         self.layout_changed.emit('agonist', self.agonist_layout)
+        self.layout_changed.emit('group_id', self.group_id_layout)  # New
 
     def create_default_agonist_layout(self, rows, cols):
         """Create a default agonist layout"""
@@ -383,6 +430,13 @@ class PlateLayoutEditor(QWidget):
                 df.columns = [str(i+1) for i in range(self.cols)]
                 self.config_manager.save_plate_layout('cell_id_layout.csv', df, overwrite=True)
 
+            # New: Save group ID layout
+            if self.group_id_layout is not None:
+                df = pd.DataFrame(self.group_id_layout)
+                df.index = [chr(65 + i) for i in range(self.rows)]
+                df.columns = [str(i+1) for i in range(self.cols)]
+                self.config_manager.save_plate_layout('group_id_layout.csv', df, overwrite=True)
+
             QMessageBox.information(self, "Success", "Plate layouts saved successfully.")
             logger.info("Plate layouts saved successfully.")
             return True
@@ -414,6 +468,13 @@ class PlateLayoutEditor(QWidget):
             if cell_id_df is not None:
                 self.cell_id_layout = np.array(cell_id_df)
                 # No editor for cell ID layout currently
+
+            # New: Load group ID layout
+            group_id_df = self.config_manager.load_plate_layout('group_id_layout.csv')
+            if group_id_df is not None:
+                self.group_id_layout = np.array(group_id_df)
+                self.populate_layout_table(self.group_id_editor, self.group_id_layout)
+                self.layout_changed.emit('group_id', self.group_id_layout)
 
             QMessageBox.information(self, "Success", "Plate layouts loaded successfully.")
             logger.info("Plate layouts loaded successfully.")

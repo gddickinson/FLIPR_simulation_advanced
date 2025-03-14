@@ -1,6 +1,6 @@
 # FLIPR Calcium Response Simulator
 
-A comprehensive Python application for simulating FLIPR (Fluorometric Imaging Plate Reader) calcium signaling data, with support for various cell types, agonists, and error conditions. This simulator is designed to generate realistic calcium response data for testing analysis pipelines, validating diagnostic assays, and exploring error detection algorithms.
+A comprehensive Python application for simulating FLIPR (Fluorometric Imaging Plate Reader) calcium signaling data, with support for various cell types, agonists, Group IDs, and error conditions. This simulator is designed to generate realistic calcium response data for testing analysis pipelines, validating diagnostic assays, and exploring error detection algorithms.
 
 ![FLIPR Simulator Screenshot](docs/images/application_screenshot.jpg)
 
@@ -8,7 +8,7 @@ A comprehensive Python application for simulating FLIPR (Fluorometric Imaging Pl
 
 The FLIPR Calcium Response Simulator provides a realistic simulation of calcium signaling responses based on published data from autism spectrum disorder research. The application generates time-series fluorescence data that mimics experimental FLIPR readings for different cell types (neurotypical, ASD, FXS, etc.) in response to agonists like ATP.
 
-The software offers a graphical user interface that allows users to design plate layouts, configure simulation parameters, introduce various error conditions, and visualize results. Advanced features include batch processing, error comparison, and data export capabilities.
+The software offers a graphical user interface that allows users to design plate layouts, configure simulation parameters, introduce various error conditions, and visualize results. Advanced features include batch processing, error comparison, and data export capabilities that match the format of actual FLIPR instruments.
 
 ## Features
 
@@ -21,6 +21,7 @@ The software offers a graphical user interface that allows users to design plate
 
 ### Interactive Plate Layout Design
 - Design custom plate layouts with different cell types, agonists, and concentrations
+- Assign Group IDs to categorize and organize experimental conditions
 - Visualize layouts with color-coding for easy interpretation
 - Save and load plate layouts for reproducible experiments
 - Apply patterns to quickly create systematic experimental designs
@@ -47,10 +48,21 @@ The software offers a graphical user interface that allows users to design plate
 - Export publication-quality plots
 
 ### Data Export and Analysis
-- Export simulation data to CSV or Excel formats
+- Export simulation data in multiple formats:
+  - Standard CSV or Excel
+  - FLIPR format (.seq1 and .csv) matching actual instrument output
 - Configure export settings (file naming, location)
 - Auto-save functionality for batch processing
 - Comprehensive metadata for experiment tracking
+
+### Group ID Management
+- Assign and track experimental groups and conditions
+- Organize data for more structured analysis
+- Apply patterns for rapid group assignment
+- Multiple organization schemes:
+  - Unique column-based
+  - Quadrant-based
+  - Alternating patterns
 
 ### Debugging and Logging
 - Comprehensive logging system
@@ -108,6 +120,7 @@ The Simulation tab allows you to run simulations and visualize results:
    - Set the number of timepoints, time interval, and agonist addition time
    - Adjust noise parameters (read noise, background, photobleaching)
    - Enable/disable random seed for reproducible results
+   - Set DF/F0 calculation options
 
 2. **Run Simulation**:
    - Click "Run Simulation" to execute the simulation with current settings
@@ -121,7 +134,7 @@ The Simulation tab allows you to run simulations and visualize results:
 4. **Save/Load/Export**:
    - Save current configuration for future use
    - Load previously saved configurations
-   - Export simulation data to CSV or Excel
+   - Export simulation data in various formats (Standard CSV/Excel or FLIPR Format)
 
 ### Plate Layout Tab
 Design your experimental plate layout:
@@ -136,9 +149,14 @@ Design your experimental plate layout:
    - View and edit agonist properties
    - Adjust concentration values in μM
 
-3. **Plate Visualization**:
+3. **Group ID Configuration**:
+   - Assign group IDs to categorize experimental conditions
+   - Apply patterns (Unique Columns, Quadrants, Alternating)
+   - Customize group colors for better visualization
+
+4. **Plate Visualization**:
    - View color-coded representations of the plate layout
-   - Switch between cell type, agonist, and concentration views
+   - Switch between cell type, agonist, concentration, and group ID views
    - Save and load layouts for reuse
 
 ### Error Simulation Tab
@@ -182,7 +200,7 @@ Configure global application settings:
 
 1. **Output Settings**:
    - Set default output directory
-   - Choose default export format (CSV/Excel)
+   - Choose default export format (CSV/Excel/FLIPR)
    - Configure auto-save options
 
 2. **File Naming**:
@@ -219,6 +237,7 @@ The default 96-well plate layout follows a common experimental design:
   - Rows A-C: ATP (100 μM)
   - Rows D-F: Ionomycin (1 μM)
   - Rows G-H: Buffer (control)
+- **Group IDs (by Column)**: Unique group ID for each column
 
 This provides triplicate measurements for each agonist, duplicate buffer controls, and testing of all cell lines against all agonists.
 
@@ -260,12 +279,27 @@ This provides triplicate measurements for each agonist, duplicate buffer control
 - **Exponential Drift**: Exponentially increasing/decreasing drift
 - **Delayed Response**: Delayed response to agonist
 
+## FLIPR Export Format
+
+The simulator can export data in formats that match actual FLIPR instrument output:
+
+### .seq1 File
+- Contains the raw trace data for each well
+- Includes time points and fluorescence values
+- Formatted to match the FLIPR instrument output
+
+### .csv File
+- Includes summary data and metadata
+- Contains well information, peak responses, and group IDs
+- Compatible with FLIPR data analysis workflows
+
 ## Troubleshooting
 
 ### Common Issues
 - **Simulation takes a long time**: Reduce the number of timepoints or wells
 - **Graph doesn't update**: Switch to a different plot type and back
 - **Error during simulation**: Check the Debug Console for detailed error messages
+- **Run button stays disabled**: Restart the application if the button doesn't re-enable
 
 ### Error Messages
 - **"lam value too large"**: Very large values in simulation; try reducing peak heights

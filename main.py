@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QTabWidget, QWidget,
                             QFileDialog, QMessageBox, QTextEdit, QGroupBox,
                             QFormLayout, QLineEdit, QSplitter, QFrame, QSizePolicy,
                             QTableWidgetItem, QTableWidget, QHeaderView, QGridLayout,
-                            QRadioButton, QDialog)
+                            QRadioButton, QDialog, QInputDialog)
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QThread
 from PyQt5.QtGui import QFont, QIcon, QTextCursor, QColor
 import numpy as np
@@ -20,6 +20,8 @@ from matplotlib.figure import Figure
 
 import json
 import re
+from datetime import datetime, timedelta
+import csv
 
 # Import simulation modules
 from simulation_engine import SimulationEngine
@@ -522,6 +524,17 @@ class MainWindow(QMainWindow):
                     concentration_layout.append(row_data)
                 config['concentration_layout'] = concentration_layout
 
+            # New: Get group IDs from plate layout
+            if hasattr(self, 'group_id_layout_table'):
+                group_id_layout = []
+                for row in range(self.group_id_layout_table.rowCount()):
+                    row_data = []
+                    for col in range(self.group_id_layout_table.columnCount()):
+                        item = self.group_id_layout_table.item(row, col)
+                        row_data.append(item.text() if item else "Group A")
+                    group_id_layout.append(row_data)
+                config['group_id_layout'] = group_id_layout
+
             # Get active errors from error simulation tab
             if hasattr(self, 'get_active_errors'):
                 active_errors = self.get_active_errors()
@@ -824,6 +837,10 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'export_data_btn'):
             self.export_data_btn.setEnabled(True)
 
+        # Re-enable the run button
+        if hasattr(self, 'run_btn'):
+            self.run_btn.setEnabled(True)
+
         # Debug the DF/F0 settings before plotting
         self.debug_ui_settings()
 
@@ -1053,6 +1070,54 @@ class MainWindow(QMainWindow):
         agonist_control_group.setLayout(agonist_control_layout)
         controls_layout.addWidget(agonist_control_group)
 
+        # New: Add group ID controls
+        group_id_control_group = QGroupBox("Group IDs")
+        group_id_control_layout = QVBoxLayout()
+
+        # Group ID by column
+        group_id_col_layout = QHBoxLayout()
+        group_id_col_layout.addWidget(QLabel("Column:"))
+
+        self.group_id_col_combo = QComboBox()
+        self.group_id_col_combo.addItems([str(i) for i in range(1, 13)])  # 1-12 for 96-well
+        group_id_col_layout.addWidget(self.group_id_col_combo)
+
+        group_id_col_layout.addWidget(QLabel("Group ID:"))
+
+        self.group_id_combo = QComboBox()
+        self.group_id_combo.addItems(["Group A", "Group B", "Group C", "Group D"])
+        self.group_id_combo.setEditable(True)  # Allow custom group names
+        group_id_col_layout.addWidget(self.group_id_combo)
+
+        self.apply_group_id_btn = QPushButton("Apply to Column")
+        self.apply_group_id_btn.clicked.connect(self.apply_group_id_to_column)
+        group_id_col_layout.addWidget(self.apply_group_id_btn)
+
+        group_id_control_layout.addLayout(group_id_col_layout)
+
+        # Add pattern options
+        pattern_layout = QHBoxLayout()
+        pattern_layout.addWidget(QLabel("Apply Pattern:"))
+
+        self.group_id_pattern_combo = QComboBox()
+        self.group_id_pattern_combo.addItems([
+            "Default (Column-based)",
+            "Unique Columns",  # New option
+            "By Quadrants",
+            "Alternating Columns",
+            "Alternating Rows"
+        ])
+        pattern_layout.addWidget(self.group_id_pattern_combo)
+
+        self.apply_group_pattern_btn = QPushButton("Apply Pattern")
+        self.apply_group_pattern_btn.clicked.connect(self.apply_group_id_pattern)
+        pattern_layout.addWidget(self.apply_group_pattern_btn)
+
+        group_id_control_layout.addLayout(pattern_layout)
+
+        group_id_control_group.setLayout(group_id_control_layout)
+        controls_layout.addWidget(group_id_control_group)
+
         layout.addLayout(controls_layout)
 
         # Plate visualization
@@ -1074,8 +1139,14 @@ class MainWindow(QMainWindow):
         self.concentration_layout_table.setHorizontalHeaderLabels([str(i) for i in range(1, 13)])
         self.concentration_layout_table.setVerticalHeaderLabels(["A", "B", "C", "D", "E", "F", "G", "H"])
 
+        # New: Create table for group ID layout
+        self.group_id_layout_table = QTableWidget(8, 12)  # 8 rows x 12 columns for 96-well
+        self.group_id_layout_table.setHorizontalHeaderLabels([str(i) for i in range(1, 13)])
+        self.group_id_layout_table.setVerticalHeaderLabels(["A", "B", "C", "D", "E", "F", "G", "H"])
+
         # Set up cell sizes
-        for table in [self.cell_layout_table, self.agonist_layout_table, self.concentration_layout_table]:
+        for table in [self.cell_layout_table, self.agonist_layout_table,
+                     self.concentration_layout_table, self.group_id_layout_table]:
             for i in range(8):
                 table.setRowHeight(i, 40)
             for i in range(12):
@@ -1088,6 +1159,7 @@ class MainWindow(QMainWindow):
         tab_layout.addTab(self.cell_layout_table, "Cell Lines")
         tab_layout.addTab(self.agonist_layout_table, "Agonists")
         tab_layout.addTab(self.concentration_layout_table, "Concentrations (µM)")
+        tab_layout.addTab(self.group_id_layout_table, "Group IDs")  # New tab
 
         plate_layout.addWidget(tab_layout)
 
@@ -1100,6 +1172,7 @@ class MainWindow(QMainWindow):
         self.load_layout_btn = QPushButton("Load Layout")
         self.load_layout_btn.clicked.connect(self.load_plate_layout)
 
+        # Define the button before connecting it
         self.reset_layout_btn = QPushButton("Reset to Default")
         self.reset_layout_btn.clicked.connect(self.reset_plate_layout)
 
@@ -1164,6 +1237,16 @@ class MainWindow(QMainWindow):
 
                 self.concentration_layout_table.setItem(row, col, QTableWidgetItem(conc))
 
+        # Initialize group ID layout with unique group ID for each column
+        for row in range(8):
+            for col in range(12):
+                # Assign a unique group ID to each column (Group 1, Group 2, etc.)
+                group_id = f"Group {col+1}"
+                self.group_id_layout_table.setItem(row, col, QTableWidgetItem(group_id))
+                self._set_group_id_background_color(self.group_id_layout_table, row, col, group_id)
+
+
+
     def _set_cell_background_color(self, table, row, col, cell_type):
         """Set cell background color based on cell type"""
         colors = {
@@ -1211,6 +1294,124 @@ class MainWindow(QMainWindow):
         # Update UI elements
         if format_text == "384-well":
             self.debug_console.append_message("384-well format not fully implemented", level="WARNING")
+
+    def apply_group_id_to_column(self):
+        """Apply selected group ID to an entire column"""
+        try:
+            col = int(self.group_id_col_combo.currentText()) - 1  # Convert to 0-based index
+            group_id = self.group_id_combo.currentText()
+
+            # Update the group ID layout table
+            for row in range(8):  # Assuming 96-well plate
+                self.group_id_layout_table.setItem(row, col, QTableWidgetItem(group_id))
+                self._set_group_id_background_color(self.group_id_layout_table, row, col, group_id)
+
+            self.debug_console.append_message(f"Applied group ID {group_id} to column {col+1}")
+        except Exception as e:
+            self.debug_console.append_message(f"Error applying group ID: {str(e)}", level="ERROR")
+
+    def apply_group_id_pattern(self):
+        """Apply a pattern to the group ID layout"""
+        try:
+            pattern_type = self.group_id_pattern_combo.currentText()
+            group_ids = ["Group A", "Group B", "Group C", "Group D"]
+
+            # Clear existing group IDs
+            for row in range(8):
+                for col in range(12):
+                    self.group_id_layout_table.setItem(row, col, QTableWidgetItem(""))
+
+            if pattern_type == "Default (Column-based)":
+                # Apply groups by column
+                for col in range(12):
+                    group_id = group_ids[col % 4]  # Cycle through the groups
+                    for row in range(8):
+                        self.group_id_layout_table.setItem(row, col, QTableWidgetItem(group_id))
+                        self._set_group_id_background_color(self.group_id_layout_table, row, col, group_id)
+
+            elif pattern_type == "By Quadrants":
+                # Split the plate into 4 quadrants
+                quadrants = [
+                    {"rows": range(0, 4), "cols": range(0, 6), "group": "Group A"},
+                    {"rows": range(0, 4), "cols": range(6, 12), "group": "Group B"},
+                    {"rows": range(4, 8), "cols": range(0, 6), "group": "Group C"},
+                    {"rows": range(4, 8), "cols": range(6, 12), "group": "Group D"}
+                ]
+
+                for quadrant in quadrants:
+                    for row in quadrant["rows"]:
+                        for col in quadrant["cols"]:
+                            self.group_id_layout_table.setItem(row, col, QTableWidgetItem(quadrant["group"]))
+                            self._set_group_id_background_color(self.group_id_layout_table, row, col, quadrant["group"])
+
+            elif pattern_type == "Alternating Columns":
+                # Apply alternating groups by column
+                for col in range(12):
+                    group_id = group_ids[col % 2]  # Alternate between first two groups
+                    for row in range(8):
+                        self.group_id_layout_table.setItem(row, col, QTableWidgetItem(group_id))
+                        self._set_group_id_background_color(self.group_id_layout_table, row, col, group_id)
+
+            elif pattern_type == "Alternating Rows":
+                # Apply alternating groups by row
+                for row in range(8):
+                    group_id = group_ids[row % 2]  # Alternate between first two groups
+                    for col in range(12):
+                        self.group_id_layout_table.setItem(row, col, QTableWidgetItem(group_id))
+                        self._set_group_id_background_color(self.group_id_layout_table, row, col, group_id)
+
+            elif pattern_type == "Unique Columns":
+                # Apply unique group ID to each column
+                for col in range(12):
+                    group_id = f"Group {col+1}"
+                    for row in range(8):
+                        self.group_id_layout_table.setItem(row, col, QTableWidgetItem(group_id))
+                        self._set_group_id_background_color(self.group_id_layout_table, row, col, group_id)
+
+            self.debug_console.append_message(f"Applied {pattern_type} pattern to group IDs")
+        except Exception as e:
+            self.debug_console.append_message(f"Error applying group ID pattern: {str(e)}", level="ERROR")
+
+
+    def _set_group_id_background_color(self, table, row, col, group_id):
+        """Set cell background color based on group ID"""
+        # Define colors for different groups
+        colors = {
+            "Group A": QColor("#8DD3C7"),  # Mint
+            "Group B": QColor("#FFFFB3"),  # Pale Yellow
+            "Group C": QColor("#BEBADA"),  # Lavender
+            "Group D": QColor("#FB8072"),  # Salmon
+            # Add more colors as needed
+        }
+
+        # Extract just the group letter if it's in form "Group X"
+        if group_id.startswith("Group ") and len(group_id) > 6:
+            group_letter = group_id[6:]
+            if len(group_letter) == 1:
+                color_key = f"Group {group_letter}"
+                if color_key in colors:
+                    group_id = color_key
+
+        # Get the appropriate color
+        color = colors.get(group_id)
+
+        # If we don't have a pre-defined color, generate one based on the hash of the group ID
+        if color is None:
+            # Generate a stable color based on the hash of the group ID
+            hash_val = hash(group_id) % 0xFFFFFF
+            r = (hash_val & 0xFF0000) >> 16
+            g = (hash_val & 0x00FF00) >> 8
+            b = hash_val & 0x0000FF
+            color = QColor(r, g, b)
+
+        # Apply color with transparency
+        color.setAlpha(100)
+
+        # Set the background color
+        item = table.item(row, col)
+        if item:
+            item.setBackground(color)
+
 
     def apply_cell_to_column(self):
         """Apply selected cell type to an entire column"""
@@ -2487,6 +2688,7 @@ class MainWindow(QMainWindow):
             self.sim_thread.error_occurred.connect(self.simulation_error)
 
             # Disable run button
+            self.run_btn.setEnabled(False)
             self.statusBar().showMessage("Simulation running...")
 
             # Start simulation
@@ -2496,6 +2698,8 @@ class MainWindow(QMainWindow):
             logger.error(f"Error setting up simulation: {str(e)}", exc_info=True)
             self.debug_console.append_message(f"Error: {str(e)}", level='ERROR')
             QMessageBox.critical(self, "Error", f"Failed to start simulation: {str(e)}")
+            # Re-enable run button if error occurs
+            self.run_btn.setEnabled(True)
 
 
 
@@ -2509,6 +2713,10 @@ class MainWindow(QMainWindow):
         """Handle simulation errors"""
         self.debug_console.append_message(f"Simulation failed: {error_msg}", level='ERROR')
         self.statusBar().showMessage("Simulation failed")
+
+        # Re-enable the run button on error
+        if hasattr(self, 'run_btn'):
+            self.run_btn.setEnabled(True)
 
         QMessageBox.critical(self, "Simulation Error", f"Simulation failed: {error_msg}")
 
@@ -3017,10 +3225,24 @@ class MainWindow(QMainWindow):
             output_dir = self.output_dir_edit.text() if hasattr(self, 'output_dir_edit') else os.path.join(os.getcwd(), "simulation_results")
             os.makedirs(output_dir, exist_ok=True)
 
-            # Export based on format
-            if export_format == "CSV":
+            # Add FLIPR format option - show a dialog to ask user for format
+            formats = ["Standard CSV", "Standard Excel", "FLIPR Format (.seq1 and .csv)"]
+            selected_format, ok = QInputDialog.getItem(
+                self, "Select Export Format",
+                "Choose the export format:",
+                formats,
+                0, False
+            )
+
+            if not ok:
+                return False
+
+            # Export based on selected format
+            if selected_format == "FLIPR Format (.seq1 and .csv)":
+                return self.export_to_flipr_format(output_dir, filename)
+            elif selected_format == "Standard CSV":
                 return self.export_to_csv(output_dir, filename)
-            else:  # Excel
+            else:  # Standard Excel
                 return self.export_to_excel(output_dir, filename)
 
         except Exception as e:
@@ -3119,6 +3341,176 @@ class MainWindow(QMainWindow):
             self.debug_console.append_message(f"Error exporting to Excel: {str(e)}", level='ERROR')
             raise e
 
+    # Export functionality for FLIPR format - simplified version
+
+    def export_to_flipr_format(self, output_dir, filename_base):
+        """
+        Export simulation results to FLIPR format files (.seq1 and .csv)
+
+        Args:
+            output_dir (str): Output directory
+            filename_base (str): Base filename without extension
+
+        Returns:
+            bool: True if export was successful, False otherwise
+        """
+        try:
+            # Extract data
+            plate_data = self.last_results['plate_data']
+            time_points = self.last_results['time_points']
+            metadata = self.last_results.get('metadata', [])
+            params = self.last_results.get('params', {})
+
+            # Get current date for filename
+            current_date = datetime.now().strftime("%m%d%Y")
+            # Format the base filename if not already containing a date
+            if not any(char.isdigit() for char in filename_base):
+                filename_with_date = f"{current_date}_{filename_base}"
+            else:
+                filename_with_date = filename_base
+
+            # Get plate dimensions
+            rows = 8  # Standard for 96-well plate
+            cols = 12
+
+            # 1. Create .seq1 file - simplified version
+            seq_file = os.path.join(output_dir, f"{filename_with_date}.seq1.txt")
+
+            with open(seq_file, 'w') as f:
+                # Write header row with filename - simplified to just contain the path
+                f.write(f"File = C:\\Users\\fliprtetra\\Documents\\Molecular Devices\\ScreenWorks\\MyData\\{filename_with_date}_n001.fmd\t\t\t\t")
+
+                # Write "Well" header and time points
+                f.write("Well\t")
+
+                for t in time_points:
+                    f.write(f"{t:.2f}\t")
+                f.write("\n")
+
+                # Write "Positive Scaling = OFF" row
+                f.write("Positive Scaling = OFF\t\t\t\t")
+
+                # Export data for each well, row by row
+                for row in range(rows):
+                    for col in range(cols):
+                        well_idx = row * cols + col
+                        if well_idx < len(plate_data):
+                            well_id = f"{chr(65 + row)}{col + 1}"  # e.g., A1, B5, etc.
+
+                            if col == 0:  # First column in each row
+                                f.write(f"{well_id}\t")
+                            else:
+                                f.write("\t\t\t\t" + f"{well_id}\t")
+
+                            # Write all data points for the well
+                            for value in plate_data[well_idx]:
+                                f.write(f"{value:.2f}\t")
+                            f.write("\n")
+
+                # Write just a few essential headers
+                f.write("Negative Correction = OFF\t\t\t\t\n")
+                f.write("Subtract Bias Value = OFF\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\n")
+
+            # 2. Create CSV file
+            csv_file = os.path.join(output_dir, f"{filename_with_date}.csv")
+
+            # For the CSV, we'll create a format more like the example provided
+            with open(csv_file, 'w', newline='') as csvfile:
+                writer = csv.writer(csvfile)
+
+                # Header row identifying the data type - kinetic reduction
+                writer.writerow(["Kinetic Reduction : Max-Min(1-9, Read Mode 1)", "", "", "", "", "", "", "", "", "", "", "", "", "", ""])
+
+                # Create empty rows to match the FLIPR CSV format
+                for _ in range(3):
+                    writer.writerow([""] * 15)
+
+                # Use the metadata to organize cell types and group IDs by well
+                cell_types_by_well = {}
+                group_ids_by_well = {}
+
+                for well_idx in range(rows * cols):
+                    if well_idx < len(metadata):
+                        well_meta = metadata[well_idx]
+                        well_id = well_meta.get('well_id', '')
+
+                        cell_types_by_well[well_id] = well_meta.get('cell_line', 'Neurotypical')
+                        group_ids_by_well[well_id] = well_meta.get('group_id', 'Group A')
+
+                # Create rows for each well
+                for row_idx in range(rows):
+                    row_letter = chr(65 + row_idx)  # A, B, C, etc.
+
+                    row_data = [f"Row {row_letter}"]  # First column is row identifier
+
+                    # Add data for each column in this row
+                    for col_idx in range(cols):
+                        well_id = f"{row_letter}{col_idx + 1}"
+
+                        # Get peak response for this well
+                        peak_response = 0
+                        well_idx = row_idx * cols + col_idx
+
+                        if well_idx < len(plate_data):
+                            # Calculate peak response
+                            baseline_end = int(params.get('agonist_addition_time', 10) / params.get('time_interval', 0.4))
+                            if len(plate_data[well_idx]) > baseline_end:
+                                baseline = np.mean(plate_data[well_idx][:baseline_end]) if baseline_end > 0 else plate_data[well_idx][0]
+                                peak = np.max(plate_data[well_idx][baseline_end:])
+                                peak_response = peak - baseline
+
+                        # Add value formatted to 2 decimal places
+                        row_data.append(f"{peak_response:.2f}")
+
+                    # Add empty columns to match FLIPR format (usually has 15 columns)
+                    while len(row_data) < 15:
+                        row_data.append("")
+
+                    writer.writerow(row_data)
+
+                # Add empty row as separator
+                writer.writerow([""] * 15)
+
+                # Add cell type information
+                cell_type_row = ["Cell Types"]
+                for r in range(rows):
+                    for c in range(cols):
+                        well_id = f"{chr(65 + r)}{c + 1}"
+                        cell_type_row.append(cell_types_by_well.get(well_id, ""))
+
+                # Ensure row has exactly 15 columns
+                while len(cell_type_row) < 15:
+                    cell_type_row.append("")
+                cell_type_row = cell_type_row[:15]  # Truncate if too long
+
+                writer.writerow(cell_type_row)
+
+                # Add group ID information
+                group_id_row = ["Group IDs"]
+                for r in range(rows):
+                    for c in range(cols):
+                        well_id = f"{chr(65 + r)}{c + 1}"
+                        group_id_row.append(group_ids_by_well.get(well_id, ""))
+
+                # Ensure row has exactly 15 columns
+                while len(group_id_row) < 15:
+                    group_id_row.append("")
+                group_id_row = group_id_row[:15]  # Truncate if too long
+
+                writer.writerow(group_id_row)
+
+                # Add a timestamp row at the bottom
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                writer.writerow([f"Exported on: {timestamp}"] + [""] * 14)
+
+            self.debug_console.append_message(f"Data exported in FLIPR format to {output_dir}")
+            self.statusBar().showMessage(f"Data exported successfully to {output_dir}", 3000)
+            return True
+
+        except Exception as e:
+            self.debug_console.append_message(f"Error exporting to FLIPR format: {str(e)}", level='ERROR')
+            logger.error(f"Error exporting to FLIPR format: {str(e)}", exc_info=True)
+            return False
 
     def reset_noise_parameters(self):
         """Reset noise parameters to their default values"""

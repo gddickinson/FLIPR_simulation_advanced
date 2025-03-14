@@ -114,6 +114,17 @@ class SimulationEngine:
         else:
             agonist_layout = self._create_default_agonist_layout(rows, cols, 'ATP')
 
+        # New: Get group ID layout or create default
+        if 'group_id_layout' in params:
+            group_id_layout = np.array(params['group_id_layout'])
+        else:
+            # Create a default group layout if none provided
+            group_id_layout = np.empty((rows, cols), dtype=object)
+            for j in range(cols):
+                group_id = f"Group {chr(65 + (j % 4))}"  # Group A, B, C, D pattern
+                for i in range(rows):
+                    group_id_layout[i, j] = group_id
+
         # Create default cell ID layout
         cell_id_layout = self._create_default_cell_id_layout(rows * cols)
 
@@ -136,6 +147,8 @@ class SimulationEngine:
                 agonist = agonist_layout[row, col]
                 cell_id = f"{chr(65 + row)}{col + 1}"  # e.g., A1, B5, etc.
                 concentration = concentration_layout[row, col]
+                # New: Get group ID for this well
+                group_id = group_id_layout[row, col]
 
                 if cell_line not in self.cell_lines or agonist not in self.agonists:
                     plate_data[well] = self._add_realistic_noise(np.zeros(params['num_timepoints']),
@@ -148,6 +161,7 @@ class SimulationEngine:
                         'cell_line': cell_line,
                         'agonist': agonist,
                         'concentration': concentration,
+                        'group_id': group_id,  # New: Include group ID
                         'valid': False,
                         'error': 'Invalid cell line or agonist'
                     })
@@ -204,6 +218,7 @@ class SimulationEngine:
                     'agonist': agonist,
                     'concentration': concentration,
                     'response_factor': response_factor,
+                    'group_id': group_id,  # New: Include group ID
                     'valid': True
                 })
 
@@ -258,7 +273,6 @@ class SimulationEngine:
             sample_f0 = np.mean(plate_data[sample_well][:baseline_end])
             logger.info(f"Sample well F0: {sample_f0}, min: {np.min(plate_data[sample_well])}, max: {np.max(plate_data[sample_well])}")
             logger.info(f"Sample well DF/F0 min: {np.min(df_f0_data[sample_well])}, max: {np.max(df_f0_data[sample_well])}")
-
 
         return results
 
