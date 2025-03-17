@@ -3411,97 +3411,135 @@ class MainWindow(QMainWindow):
                 f.write("Negative Correction = OFF\t\t\t\t\n")
                 f.write("Subtract Bias Value = OFF\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\n")
 
-            # 2. Create CSV file
+            # 2. Create CSV file - matching the format in the screenshots
             csv_file = os.path.join(output_dir, f"{filename_with_date}.csv")
 
-            # For the CSV, we'll create a format more like the example provided
+            # Calculate peak responses for each well
+            peak_responses = []
+            baseline_end = int(params.get('agonist_addition_time', 10) / params.get('time_interval', 0.4))
+
+            for well_idx, well_data in enumerate(plate_data):
+                if well_idx < rows * cols:
+                    if len(well_data) > baseline_end:
+                        baseline = np.mean(well_data[:baseline_end]) if baseline_end > 0 else well_data[0]
+                        peak = np.max(well_data[baseline_end:])
+                        peak_response = peak - baseline
+                        peak_responses.append(peak_response)
+                    else:
+                        peak_responses.append(0)
+
+            # Get unique group IDs and create group data
+            unique_groups = {}
+            for well_idx, meta in enumerate(metadata):
+                group_id = meta.get('group_id', 'Unknown')
+                if group_id not in unique_groups:
+                    unique_groups[group_id] = []
+
+                if well_idx < len(peak_responses):
+                    unique_groups[group_id].append({
+                        'well_idx': well_idx,
+                        'value': peak_responses[well_idx],
+                        'row': well_idx // cols,
+                        'col': well_idx % cols,
+                        'well_id': f"{chr(65 + (well_idx // cols))}{(well_idx % cols) + 1}"
+                    })
+
+            # For the CSV, create the exact format shown in the screenshots
             with open(csv_file, 'w', newline='') as csvfile:
                 writer = csv.writer(csvfile)
 
-                # Header row identifying the data type - kinetic reduction
-                writer.writerow(["Kinetic Reduction : Max-Min(1-9, Read Mode 1)", "", "", "", "", "", "", "", "", "", "", "", "", "", ""])
+                # Header in the proper split format
+                # First row just contains the first cell text
+                writer.writerow(["Kinetic Reduction : Max-Min(1-9, Read Mode 1)"])
 
-                # Create empty rows to match the FLIPR CSV format
-                for _ in range(3):
-                    writer.writerow([""] * 15)
+                # Second row contains the column headers
+                writer.writerow([
+                    "Group Name",
+                    "Well ID",
+                    "Kinetic Reduction Value",
+                    "Average",
+                    "Sum",
+                    "Minimum",
+                    "Maximum",
+                    "Max-Min",
+                    "Z Score",
+                    "Standard Deviation",
+                    "Standard Deviation +1",
+                    "Standard Deviation -1",
+                    "Concentration",
+                    "Units",
+                    "Notes"
+                ])
 
-                # Use the metadata to organize cell types and group IDs by well
-                cell_types_by_well = {}
-                group_ids_by_well = {}
+                # Process each group
+                for group_id, wells in unique_groups.items():
+                    # Skip if no values
+                    if not wells:
+                        continue
 
-                for well_idx in range(rows * cols):
-                    if well_idx < len(metadata):
-                        well_meta = metadata[well_idx]
-                        well_id = well_meta.get('well_id', '')
+                    values = [well['value'] for well in wells]
 
-                        cell_types_by_well[well_id] = well_meta.get('cell_line', 'Neurotypical')
-                        group_ids_by_well[well_id] = well_meta.get('group_id', 'Group A')
+                    # Calculate statistics for this group
+                    avg = sum(values) / len(values) if values else 0
+                    total_sum = sum(values)
+                    min_val = min(values) if values else 0
+                    max_val = max(values) if values else 0
+                    max_min = max_val - min_val
+                    std_dev = np.std(values) if values else 0
+                    std_dev_plus = avg + std_dev
+                    std_dev_minus = avg - std_dev
 
-                # Create rows for each well
-                for row_idx in range(rows):
-                    row_letter = chr(65 + row_idx)  # A, B, C, etc.
+                    # Default concentration for all groups
+                    concentration = "10"
+                    units = "µM"
 
-                    row_data = [f"Row {row_letter}"]  # First column is row identifier
+                    # Create group row
+                    group_row = [
+                        group_id,                    # Group Name
+                        "",                          # Well ID (empty in header row)
+                        f"{max_min:.2f}",            # Kinetic Reduction Value
+                        f"{avg:.2f}",                # Average
+                        f"{total_sum:.2f}",          # Sum
+                        f"{min_val:.2f}",            # Minimum
+                        f"{max_val:.2f}",            # Maximum
+                        f"{max_min:.2f}",            # Max-Min
+                        "undefined",                 # Z Score
+                        f"{std_dev:.2f}",            # Standard Deviation
+                        f"{std_dev_plus:.2f}",       # Standard Deviation +1
+                        f"{std_dev_minus:.2f}",      # Standard Deviation -1
+                        concentration,               # Concentration
+                        units,                       # Units
+                        ""                           # Notes
+                    ]
+                    writer.writerow(group_row)
 
-                    # Add data for each column in this row
-                    for col_idx in range(cols):
-                        well_id = f"{row_letter}{col_idx + 1}"
+                    # Group wells by row and sort by column within each row
+                    wells_by_row = {}
+                    for well in wells:
+                        row = well['row']
+                        if row not in wells_by_row:
+                            wells_by_row[row] = []
+                        wells_by_row[row].append(well)
 
-                        # Get peak response for this well
-                        peak_response = 0
-                        well_idx = row_idx * cols + col_idx
+                    # For each row that has wells in this group, write individual rows
+                    for row in sorted(wells_by_row.keys()):
+                        # Sort wells by column
+                        row_wells = sorted(wells_by_row[row], key=lambda w: w['col'])
 
-                        if well_idx < len(plate_data):
-                            # Calculate peak response
-                            baseline_end = int(params.get('agonist_addition_time', 10) / params.get('time_interval', 0.4))
-                            if len(plate_data[well_idx]) > baseline_end:
-                                baseline = np.mean(plate_data[well_idx][:baseline_end]) if baseline_end > 0 else plate_data[well_idx][0]
-                                peak = np.max(plate_data[well_idx][baseline_end:])
-                                peak_response = peak - baseline
+                        # For each well in this row belonging to this group, write a separate row
+                        for well in row_wells:
+                            well_id = well['well_id']
+                            value = well['value']
 
-                        # Add value formatted to 2 decimal places
-                        row_data.append(f"{peak_response:.2f}")
-
-                    # Add empty columns to match FLIPR format (usually has 15 columns)
-                    while len(row_data) < 15:
-                        row_data.append("")
-
-                    writer.writerow(row_data)
-
-                # Add empty row as separator
-                writer.writerow([""] * 15)
-
-                # Add cell type information
-                cell_type_row = ["Cell Types"]
-                for r in range(rows):
-                    for c in range(cols):
-                        well_id = f"{chr(65 + r)}{c + 1}"
-                        cell_type_row.append(cell_types_by_well.get(well_id, ""))
-
-                # Ensure row has exactly 15 columns
-                while len(cell_type_row) < 15:
-                    cell_type_row.append("")
-                cell_type_row = cell_type_row[:15]  # Truncate if too long
-
-                writer.writerow(cell_type_row)
-
-                # Add group ID information
-                group_id_row = ["Group IDs"]
-                for r in range(rows):
-                    for c in range(cols):
-                        well_id = f"{chr(65 + r)}{c + 1}"
-                        group_id_row.append(group_ids_by_well.get(well_id, ""))
-
-                # Ensure row has exactly 15 columns
-                while len(group_id_row) < 15:
-                    group_id_row.append("")
-                group_id_row = group_id_row[:15]  # Truncate if too long
-
-                writer.writerow(group_id_row)
+                            # Write a row with well ID in column B and value in column C
+                            well_row = [""] * 15  # Empty row
+                            well_row[1] = well_id  # Well ID in column B
+                            well_row[2] = f"{value:.2f}"  # Value in column C
+                            writer.writerow(well_row)
 
                 # Add a timestamp row at the bottom
-                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                writer.writerow([f"Exported on: {timestamp}"] + [""] * 14)
+                #timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                #writer.writerow([f"Exported on: {timestamp}"])
 
             self.debug_console.append_message(f"Data exported in FLIPR format to {output_dir}")
             self.statusBar().showMessage(f"Data exported successfully to {output_dir}", 3000)
