@@ -3374,7 +3374,7 @@ class MainWindow(QMainWindow):
             cols = 12
 
             # 1. Create .seq1 file - simplified version
-            seq_file = os.path.join(output_dir, f"{filename_with_date}.seq1.txt")
+            seq_file = os.path.join(output_dir, f"{filename_with_date}.seq1")
 
             with open(seq_file, 'w') as f:
                 # Write header row with filename - simplified to just contain the path
@@ -3388,7 +3388,7 @@ class MainWindow(QMainWindow):
                 f.write("\n")
 
                 # Write "Positive Scaling = OFF" row
-                f.write("Positive Scaling = OFF\t\t\t\t")
+                #f.write("Positive Scaling = OFF\t\t\t\t")
 
                 # Export data for each well, row by row
                 for row in range(rows):
@@ -3397,10 +3397,10 @@ class MainWindow(QMainWindow):
                         if well_idx < len(plate_data):
                             well_id = f"{chr(65 + row)}{col + 1}"  # e.g., A1, B5, etc.
 
-                            if col == 0:  # First column in each row
-                                f.write(f"{well_id}\t")
-                            else:
-                                f.write("\t\t\t\t" + f"{well_id}\t")
+                            # if col == 0:  # First column in each row
+                            #     f.write(f"{well_id}\t")
+                            # else:
+                            f.write("\t\t\t\t" + f"{well_id}\t")
 
                             # Write all data points for the well
                             for value in plate_data[well_idx]:
@@ -3408,8 +3408,8 @@ class MainWindow(QMainWindow):
                             f.write("\n")
 
                 # Write just a few essential headers
-                f.write("Negative Correction = OFF\t\t\t\t\n")
-                f.write("Subtract Bias Value = OFF\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\n")
+                #f.write("Negative Correction = OFF\t\t\t\t\n")
+                #f.write("Subtract Bias Value = OFF\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\n")
 
             # 2. Create CSV file - matching the format in the screenshots
             csv_file = os.path.join(output_dir, f"{filename_with_date}.csv")
