@@ -180,6 +180,117 @@ class MainWindow(QMainWindow):
         # Log application start
         logger.info("FLIPR Simulator application started")
 
+    def cell_property_changed(self, row, column):
+        """Handle changes to the cell property table"""
+        try:
+            # Only process meaningful changes (columns 1-7 contain the editable values)
+            if column < 1 or column > 7:
+                return
+
+            # Get cell line name from column 0
+            cell_line_item = self.cell_property_table.item(row, 0)
+            if not cell_line_item:
+                return
+
+            cell_line = cell_line_item.text()
+
+            # Get changed value
+            value_item = self.cell_property_table.item(row, column)
+            if not value_item:
+                return
+
+            # Try to convert to appropriate type
+            try:
+                value = float(value_item.text())
+            except ValueError:
+                # Revert to previous value if not a valid number
+                properties = self.config_manager.config.get('cell_lines', {}).get(cell_line, {})
+                if column == 1:
+                    old_value = properties.get('baseline', 500)
+                elif column == 2:
+                    old_value = properties.get('peak_ionomycin', 0)
+                elif column == 3:
+                    old_value = properties.get('peak_other', 0)
+                elif column == 4:
+                    old_value = properties.get('rise_rate_ionomycin', 0.1)
+                elif column == 5:
+                    old_value = properties.get('rise_rate_other', 0.07)
+                elif column == 6:
+                    old_value = properties.get('decay_rate_ionomycin', 0.05)
+                elif column == 7:
+                    old_value = properties.get('decay_rate_other', 0.03)
+
+                self.cell_property_table.setItem(row, column, QTableWidgetItem(str(old_value)))
+                return
+
+            # Update config with new value
+            if cell_line not in self.config_manager.config.get('cell_lines', {}):
+                # Create a default configuration with all required parameters
+                self.config_manager.config.setdefault('cell_lines', {})[cell_line] = {
+                    'baseline': 500,
+                    'peak_ionomycin': 3900,
+                    'peak_other': 750,
+                    'rise_rate_ionomycin': 0.1,
+                    'rise_rate_other': 0.07,
+                    'decay_rate_ionomycin': 0.05,
+                    'decay_rate_other': 0.03
+                }
+
+            # Update the appropriate property based on the column
+            if column == 1:
+                self.config_manager.config['cell_lines'][cell_line]['baseline'] = value
+            elif column == 2:
+                self.config_manager.config['cell_lines'][cell_line]['peak_ionomycin'] = value
+            elif column == 3:
+                self.config_manager.config['cell_lines'][cell_line]['peak_other'] = value
+            elif column == 4:
+                self.config_manager.config['cell_lines'][cell_line]['rise_rate_ionomycin'] = value
+            elif column == 5:
+                self.config_manager.config['cell_lines'][cell_line]['rise_rate_other'] = value
+            elif column == 6:
+                self.config_manager.config['cell_lines'][cell_line]['decay_rate_ionomycin'] = value
+            elif column == 7:
+                self.config_manager.config['cell_lines'][cell_line]['decay_rate_other'] = value
+
+            self.debug_console.append_message(f"Updated {cell_line} properties: {self.config_manager.config['cell_lines'][cell_line]}")
+        except Exception as e:
+            self.debug_console.append_message(f"Error updating cell property: {str(e)}", level='ERROR')
+
+    def agonist_property_changed(self, row, column):
+        """Handle changes to the agonist property table"""
+        try:
+            # Only process changes to the response factor (column 1)
+            if column != 1:
+                return
+
+            # Get agonist name from column 0
+            agonist_item = self.agonist_property_table.item(row, 0)
+            if not agonist_item:
+                return
+
+            agonist = agonist_item.text()
+
+            # Get response factor value
+            factor_item = self.agonist_property_table.item(row, 1)
+            if not factor_item:
+                return
+
+            # Try to convert to float
+            try:
+                factor = float(factor_item.text())
+            except ValueError:
+                # Revert to previous value if not a valid number
+                old_factor = self.config_manager.config.get('agonists', {}).get(agonist, 1.0)
+                self.agonist_property_table.setItem(row, 1, QTableWidgetItem(str(old_factor)))
+                return
+
+            # Update config with new value
+            self.config_manager.config.setdefault('agonists', {})[agonist] = factor
+
+            self.debug_console.append_message(f"Updated {agonist} response factor to {factor}")
+        except Exception as e:
+            self.debug_console.append_message(f"Error updating agonist property: {str(e)}", level='ERROR')
+
 
     def create_debug_tab(self):
         """Create the debug console tab"""
@@ -989,25 +1100,43 @@ class MainWindow(QMainWindow):
         # Cell line concentrations
         cell_control_layout.addWidget(QLabel("Cell Characteristics:"))
 
-        self.cell_property_table = QTableWidget(3, 5)
-        self.cell_property_table.setHorizontalHeaderLabels(["Cell Type", "Baseline", "Peak (Ionomycin)", "Peak (Other)", "Decay Rate"])
+        self.cell_property_table = QTableWidget(3, 8)
+        self.cell_property_table.setHorizontalHeaderLabels([
+            "Cell Type",
+            "Baseline",
+            "Peak (Ionomycin)",
+            "Peak (Other)",
+            "Rise (Ionomycin)",
+            "Rise (Other)",
+            "Decay (Ionomycin)",
+            "Decay (Other)"
+        ])
+
         self.cell_property_table.verticalHeader().setVisible(False)
         self.cell_property_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
 
         # Fill in default cell properties
         cell_types = ["Neurotypical", "ASD", "FXS"]
+
         for i, cell_type in enumerate(cell_types):
             self.cell_property_table.setItem(i, 0, QTableWidgetItem(cell_type))
             properties = self.config_manager.config.get('cell_lines', {}).get(cell_type, {})
             self.cell_property_table.setItem(i, 1, QTableWidgetItem(str(properties.get('baseline', 500))))
             self.cell_property_table.setItem(i, 2, QTableWidgetItem(str(properties.get('peak_ionomycin', 0))))
             self.cell_property_table.setItem(i, 3, QTableWidgetItem(str(properties.get('peak_other', 0))))
-            self.cell_property_table.setItem(i, 4, QTableWidgetItem(str(properties.get('decay_rate', 0))))
+            self.cell_property_table.setItem(i, 4, QTableWidgetItem(str(properties.get('rise_rate_ionomycin', 0.1))))
+            self.cell_property_table.setItem(i, 5, QTableWidgetItem(str(properties.get('rise_rate_other', 0.07))))
+            self.cell_property_table.setItem(i, 6, QTableWidgetItem(str(properties.get('decay_rate_ionomycin', 0.05))))
+            self.cell_property_table.setItem(i, 7, QTableWidgetItem(str(properties.get('decay_rate_other', 0.03))))
 
         cell_control_layout.addWidget(self.cell_property_table)
 
         cell_control_group.setLayout(cell_control_layout)
         controls_layout.addWidget(cell_control_group)
+
+        # After initializing cell_property_table
+        self.cell_property_table.cellChanged.connect(self.cell_property_changed)
+
 
         # Add agonist controls group
         agonist_control_group = QGroupBox("Agonists")
@@ -1069,6 +1198,9 @@ class MainWindow(QMainWindow):
 
         agonist_control_group.setLayout(agonist_control_layout)
         controls_layout.addWidget(agonist_control_group)
+
+        # After initializing agonist_property_table
+        self.agonist_property_table.cellChanged.connect(self.agonist_property_changed)
 
         # New: Add group ID controls
         group_id_control_group = QGroupBox("Group IDs")

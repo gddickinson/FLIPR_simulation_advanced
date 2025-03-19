@@ -16,9 +16,33 @@ class SimulationEngine:
         """Initialize the simulation engine with default parameters"""
         # Default cell line characteristics - can be overridden by config
         self.cell_lines = {
-            'Neurotypical': {'baseline': 500, 'peak_ionomycin': 3900, 'peak_other': 750, 'rise_rate': 0.05, 'decay_rate': 0.05},
-            'ASD': {'baseline': 500, 'peak_ionomycin': 3800, 'peak_other': 500, 'rise_rate': 0.1, 'decay_rate': 0.03},
-            'FXS': {'baseline': 500, 'peak_ionomycin': 3700, 'peak_other': 400, 'rise_rate': 0.07, 'decay_rate': 0.02},
+            'Neurotypical': {
+                'baseline': 500,
+                'peak_ionomycin': 3900,
+                'peak_other': 750,
+                'rise_rate_ionomycin': 0.07,
+                'rise_rate_other': 0.05,
+                'decay_rate_ionomycin': 0.06,
+                'decay_rate_other': 0.05
+            },
+            'ASD': {
+                'baseline': 500,
+                'peak_ionomycin': 3800,
+                'peak_other': 500,
+                'rise_rate_ionomycin': 0.12,
+                'rise_rate_other': 0.10,
+                'decay_rate_ionomycin': 0.04,
+                'decay_rate_other': 0.03
+            },
+            'FXS': {
+                'baseline': 500,
+                'peak_ionomycin': 3700,
+                'peak_other': 400,
+                'rise_rate_ionomycin': 0.09,
+                'rise_rate_other': 0.07,
+                'decay_rate_ionomycin': 0.03,
+                'decay_rate_other': 0.02
+            },
         }
 
         # Default agonist characteristics
@@ -86,6 +110,19 @@ class SimulationEngine:
         """
         # Merge config with defaults
         params = {**self.default_params, **config}
+
+        # Ensure cell line and agonist properties from config are used
+        if 'cell_lines' in params:
+            for cell_line, properties in params['cell_lines'].items():
+                if cell_line in self.cell_lines:
+                    # Update existing cell line properties
+                    self.cell_lines[cell_line].update(properties)
+                else:
+                    # Add new cell line
+                    self.cell_lines[cell_line] = properties
+
+        if 'agonists' in params:
+            self.agonists.update(params['agonists'])
 
         # Set random seed if specified
         if 'random_seed' in params and params['random_seed'] is not None:
@@ -184,8 +221,10 @@ class SimulationEngine:
                     cell_params['baseline'],
                     cell_params['peak_ionomycin'],
                     cell_params['peak_other'],
-                    cell_params['rise_rate'],
-                    cell_params['decay_rate'],
+                    cell_params.get('rise_rate_ionomycin', cell_params.get('rise_rate', 0.1)),  # Backward compatibility
+                    cell_params.get('rise_rate_other', cell_params.get('rise_rate', 0.07)),     # Backward compatibility
+                    cell_params.get('decay_rate_ionomycin', cell_params.get('decay_rate', 0.05)), # Backward compatibility
+                    cell_params.get('decay_rate_other', cell_params.get('decay_rate', 0.03)),   # Backward compatibility
                     response_factor,
                     agonist,
                     params['time_interval'],
@@ -326,8 +365,10 @@ class SimulationEngine:
         new_value = value + random_amount
         return max(0, new_value)  # Ensure value is non-negative
 
-    def _generate_calcium_response(self, baseline, peak_ionomycin, peak_other, rise_rate,
-                                 decay_rate, agonist_factor, agonist, time_interval,
+    def _generate_calcium_response(self, baseline, peak_ionomycin, peak_other,
+                                 rise_rate_ionomycin, rise_rate_other,
+                                 decay_rate_ionomycin, decay_rate_other,
+                                 agonist_factor, agonist, time_interval,
                                  total_time, agonist_addition_time, num_timepoints):
         """Generate a calcium response curve based on the parameters"""
         # Create time array
@@ -344,11 +385,15 @@ class SimulationEngine:
         peak_index = int((agonist_addition_time + 5) / time_interval)  # Peak 5 seconds after agonist addition
         peak_time = time[peak_index]
 
-        # Select appropriate peak based on agonist
+        # Select appropriate peak, rise rate, and decay rate based on agonist
         if agonist == 'Ionomycin':
             peak = peak_ionomycin
+            rise_rate = rise_rate_ionomycin
+            decay_rate = decay_rate_ionomycin
         else:
             peak = peak_other
+            rise_rate = rise_rate_other
+            decay_rate = decay_rate_other
 
         # Add randomness to peak
         peak = self._add_random_amount(peak)

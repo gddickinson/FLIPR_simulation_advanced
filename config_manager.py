@@ -44,36 +44,46 @@ class ConfigManager:
                     'baseline': 500,
                     'peak_ionomycin': 4000,
                     'peak_other': 1000,
-                    'rise_rate': 0.1,
-                    'decay_rate': 0.06
+                    'rise_rate_ionomycin': 0.12,
+                    'rise_rate_other': 0.10,
+                    'decay_rate_ionomycin': 0.07,
+                    'decay_rate_other': 0.06
                 },
                 'Negative Control': {
                     'baseline': 500,
                     'peak_ionomycin': 3800,
                     'peak_other': 325,
-                    'rise_rate': 0.1,
-                    'decay_rate': 0.01
+                    'rise_rate_ionomycin': 0.12,
+                    'rise_rate_other': 0.08,
+                    'decay_rate_ionomycin': 0.02,
+                    'decay_rate_other': 0.01
                 },
                 'Neurotypical': {
                     'baseline': 500,
                     'peak_ionomycin': 3900,
                     'peak_other': 750,
-                    'rise_rate': 0.05,
-                    'decay_rate': 0.05
+                    'rise_rate_ionomycin': 0.07,
+                    'rise_rate_other': 0.05,
+                    'decay_rate_ionomycin': 0.06,
+                    'decay_rate_other': 0.05
                 },
                 'ASD': {
                     'baseline': 500,
                     'peak_ionomycin': 3800,
                     'peak_other': 500,
-                    'rise_rate': 0.1,
-                    'decay_rate': 0.03
+                    'rise_rate_ionomycin': 0.12,
+                    'rise_rate_other': 0.10,
+                    'decay_rate_ionomycin': 0.04,
+                    'decay_rate_other': 0.03
                 },
                 'FXS': {
                     'baseline': 500,
                     'peak_ionomycin': 3700,
                     'peak_other': 400,
-                    'rise_rate': 0.07,
-                    'decay_rate': 0.02
+                    'rise_rate_ionomycin': 0.09,
+                    'rise_rate_other': 0.07,
+                    'decay_rate_ionomycin': 0.03,
+                    'decay_rate_other': 0.02
                 }
             },
             'agonists': {
