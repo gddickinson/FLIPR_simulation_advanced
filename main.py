@@ -381,27 +381,6 @@ class MainWindow(QMainWindow):
         general_group.setLayout(general_form)
         control_layout.addWidget(general_group)
 
-        # Noise settings group
-        noise_group = QGroupBox("Noise Parameters")
-        noise_form = QFormLayout()
-
-        self.read_noise_spin = QDoubleSpinBox()
-        self.read_noise_spin.setRange(0, 1000)
-        self.read_noise_spin.setValue(20)
-        noise_form.addRow("Read Noise:", self.read_noise_spin)
-
-        self.background_spin = QDoubleSpinBox()
-        self.background_spin.setRange(0, 2000)
-        self.background_spin.setValue(100)
-        noise_form.addRow("Background:", self.background_spin)
-
-        self.photobleaching_spin = QDoubleSpinBox()
-        self.photobleaching_spin.setRange(0, 1.0)
-        self.photobleaching_spin.setValue(0.0005)
-        self.photobleaching_spin.setDecimals(6)
-        self.photobleaching_spin.setSingleStep(0.0005)
-        noise_form.addRow("Photobleaching Rate:", self.photobleaching_spin)
-
         # Add DF/F0 settings group
         df_f0_group = QGroupBox("DF/F0 Settings")
         df_f0_layout = QVBoxLayout()
@@ -438,16 +417,6 @@ class MainWindow(QMainWindow):
         df_f0_group.setLayout(df_f0_layout)
         control_layout.addWidget(df_f0_group)
 
-
-
-        # Add Reset to Defaults button
-        self.reset_noise_btn = QPushButton("Reset to Defaults")
-        self.reset_noise_btn.clicked.connect(self.reset_noise_parameters)
-        noise_form.addRow("", self.reset_noise_btn)
-
-        noise_group.setLayout(noise_form)
-        control_layout.addWidget(noise_group)
-
         # Random seed group
         seed_group = QGroupBox("Random Seed")
         seed_layout = QHBoxLayout()
@@ -473,6 +442,12 @@ class MainWindow(QMainWindow):
         layout_note.setWordWrap(True)
         layout_note.setStyleSheet("font-style: italic; color: #666;")
         control_layout.addWidget(layout_note)
+
+        # Randomization note
+        random_note = QLabel("Note: Configure randomization options in the Settings tab")
+        random_note.setWordWrap(True)
+        random_note.setStyleSheet("font-style: italic; color: #666;")
+        control_layout.addWidget(random_note)
 
         # Buttons
         button_layout = QHBoxLayout()
@@ -574,11 +549,24 @@ class MainWindow(QMainWindow):
                 'num_timepoints': self.num_timepoints_spin.value(),
                 'time_interval': self.time_interval_spin.value(),
                 'agonist_addition_time': self.agonist_time_spin.value(),
-                'read_noise': self.read_noise_spin.value(),
-                'background': self.background_spin.value(),
-                'photobleaching_rate': self.photobleaching_spin.value(),
                 'plate_type': self.plate_type_combo.currentText()
             }
+
+            # Get noise parameters from settings tab if available, otherwise use defaults
+            if hasattr(self, 'read_noise_amount') and hasattr(self, 'read_noise_check'):
+                config['read_noise'] = self.read_noise_amount.value() if self.read_noise_check.isChecked() else 0
+            else:
+                config['read_noise'] = 20  # Default value
+
+            if hasattr(self, 'bg_amount') and hasattr(self, 'bg_noise_check'):
+                config['background'] = self.bg_amount.value() if self.bg_noise_check.isChecked() else 0
+            else:
+                config['background'] = 100  # Default value
+
+            if hasattr(self, 'photobleach_rate') and hasattr(self, 'photobleach_check'):
+                config['photobleaching_rate'] = self.photobleach_rate.value() if self.photobleach_check.isChecked() else 0
+            else:
+                config['photobleaching_rate'] = 0.0005  # Default value
 
             # Random seed
             if not self.random_seed_check.isChecked():
@@ -635,7 +623,7 @@ class MainWindow(QMainWindow):
                     concentration_layout.append(row_data)
                 config['concentration_layout'] = concentration_layout
 
-            # New: Get group IDs from plate layout
+            # Get group IDs from plate layout
             if hasattr(self, 'group_id_layout_table'):
                 group_id_layout = []
                 for row in range(self.group_id_layout_table.rowCount()):
@@ -652,14 +640,40 @@ class MainWindow(QMainWindow):
                 if active_errors:
                     config['active_errors'] = active_errors
 
-                    # Log the active errors
-                    error_names = list(active_errors.keys())
-                    self.debug_console.append_message(f"Including {len(error_names)} active errors: {', '.join(error_names)}")
+            # Add randomization settings if available
+            if hasattr(self, 'baseline_random_check'):
+                config['randomization'] = {
+                    'baseline': {
+                        'enabled': self.baseline_random_check.isChecked(),
+                        'amount': self.baseline_random_amount.value()
+                    },
+                    'peak': {
+                        'enabled': self.peak_random_check.isChecked(),
+                        'amount': self.peak_random_amount.value()
+                    },
+                    'cell_variability': {
+                        'enabled': self.cell_var_check.isChecked(),
+                        'amount': self.cell_var_amount.value()
+                    },
+                    'shot_noise': self.shot_noise_check.isChecked(),
+                    'read_noise': {
+                        'enabled': self.read_noise_check.isChecked(),
+                        'amount': self.read_noise_amount.value()
+                    },
+                    'background': {
+                        'enabled': self.bg_noise_check.isChecked(),
+                        'amount': self.bg_amount.value()
+                    },
+                    'photobleaching': {
+                        'enabled': self.photobleach_check.isChecked(),
+                        'rate': self.photobleach_rate.value()
+                    }
+                }
 
             # Log configuration
             self.debug_console.append_message(f"Configuration: {config['num_timepoints']} timepoints, "
-                                             f"{config['time_interval']}s interval, "
-                                             f"agonist at {config['agonist_addition_time']}s")
+                                            f"{config['time_interval']}s interval, "
+                                            f"agonist at {config['agonist_addition_time']}s")
 
             return config
 
@@ -2710,12 +2724,140 @@ class MainWindow(QMainWindow):
         self.num_threads_spin.setValue(4)
         advanced_layout.addRow("Number of Threads:", self.num_threads_spin)
 
-
         advanced_group.setLayout(advanced_layout)
+
+        # NEW: Randomization options
+        randomization_group = QGroupBox("Randomization Options")
+        random_layout = QVBoxLayout()
+
+        # Add Reset to Defaults button at the top
+        reset_random_btn = QPushButton("Reset to Defaults")
+        reset_random_btn.clicked.connect(self.reset_randomization_settings)
+        reset_random_btn.setToolTip("Reset all randomization settings to their default values")
+        random_layout.addWidget(reset_random_btn)
+
+        # Base randomization controls
+        random_layout.addWidget(QLabel("<b>Base Randomization</b>"))
+
+        # Baseline randomization
+        baseline_layout = QHBoxLayout()
+        self.baseline_random_check = QCheckBox("Baseline Randomization")
+        self.baseline_random_check.setChecked(True)
+        self.baseline_random_check.setToolTip("Add random variation to baseline fluorescence")
+        baseline_layout.addWidget(self.baseline_random_check)
+
+        baseline_layout.addWidget(QLabel("Amount:"))
+        self.baseline_random_amount = QSpinBox()
+        self.baseline_random_amount.setRange(0, 1000)
+        self.baseline_random_amount.setValue(200)
+        self.baseline_random_amount.setToolTip("Maximum random amount to add/subtract from baseline")
+        baseline_layout.addWidget(self.baseline_random_amount)
+
+        random_layout.addLayout(baseline_layout)
+
+        # Peak randomization
+        peak_layout = QHBoxLayout()
+        self.peak_random_check = QCheckBox("Peak Response Randomization")
+        self.peak_random_check.setChecked(True)
+        self.peak_random_check.setToolTip("Add random variation to peak response")
+        peak_layout.addWidget(self.peak_random_check)
+
+        peak_layout.addWidget(QLabel("Amount:"))
+        self.peak_random_amount = QSpinBox()
+        self.peak_random_amount.setRange(0, 1000)
+        self.peak_random_amount.setValue(200)
+        self.peak_random_amount.setToolTip("Maximum random amount to add/subtract from peak")
+        peak_layout.addWidget(self.peak_random_amount)
+
+        random_layout.addLayout(peak_layout)
+
+        # Cell variability
+        cell_var_layout = QHBoxLayout()
+        self.cell_var_check = QCheckBox("Cell-to-Cell Variability")
+        self.cell_var_check.setChecked(True)
+        self.cell_var_check.setToolTip("Add variation in response between different wells of the same cell type")
+        cell_var_layout.addWidget(self.cell_var_check)
+
+        cell_var_layout.addWidget(QLabel("Factor:"))
+        self.cell_var_amount = QDoubleSpinBox()
+        self.cell_var_amount.setRange(0, 1.0)
+        self.cell_var_amount.setValue(0.2)
+        self.cell_var_amount.setSingleStep(0.05)
+        self.cell_var_amount.setToolTip("Standard deviation of normal distribution for variability")
+        cell_var_layout.addWidget(self.cell_var_amount)
+
+        random_layout.addLayout(cell_var_layout)
+
+        # Noise settings
+        random_layout.addWidget(QLabel("<b>Realistic Noise</b>"))
+
+        # Shot noise
+        self.shot_noise_check = QCheckBox("Shot Noise (Poisson)")
+        self.shot_noise_check.setChecked(True)
+        self.shot_noise_check.setToolTip("Add Poisson-distributed shot noise to the signal")
+        random_layout.addWidget(self.shot_noise_check)
+
+        # Read noise
+        read_noise_layout = QHBoxLayout()
+        self.read_noise_check = QCheckBox("Read Noise")
+        self.read_noise_check.setChecked(True)
+        self.read_noise_check.setToolTip("Add Gaussian detector read noise")
+        read_noise_layout.addWidget(self.read_noise_check)
+
+        read_noise_layout.addWidget(QLabel("Std Dev:"))
+        self.read_noise_amount = QSpinBox()
+        self.read_noise_amount.setRange(0, 100)
+        self.read_noise_amount.setValue(20)
+        read_noise_layout.addWidget(self.read_noise_amount)
+
+        random_layout.addLayout(read_noise_layout)
+
+        # Background fluorescence
+        bg_layout = QHBoxLayout()
+        self.bg_noise_check = QCheckBox("Background Fluorescence")
+        self.bg_noise_check.setChecked(True)
+        self.bg_noise_check.setToolTip("Add background fluorescence to all signals")
+        bg_layout.addWidget(self.bg_noise_check)
+
+        bg_layout.addWidget(QLabel("Amount:"))
+        self.bg_amount = QSpinBox()
+        self.bg_amount.setRange(0, 500)
+        self.bg_amount.setValue(100)
+        bg_layout.addWidget(self.bg_amount)
+
+        random_layout.addLayout(bg_layout)
+
+        # Photobleaching
+        photobleach_layout = QHBoxLayout()
+        self.photobleach_check = QCheckBox("Photobleaching")
+        self.photobleach_check.setChecked(True)
+        self.photobleach_check.setToolTip("Simulate fluorescence decay due to photobleaching")
+        photobleach_layout.addWidget(self.photobleach_check)
+
+        photobleach_layout.addWidget(QLabel("Rate:"))
+        self.photobleach_rate = QDoubleSpinBox()
+        self.photobleach_rate.setDecimals(5)
+        self.photobleach_rate.setRange(0, 0.01)
+        self.photobleach_rate.setSingleStep(0.0001)
+        self.photobleach_rate.setValue(0.0005)
+        photobleach_layout.addWidget(self.photobleach_rate)
+
+        random_layout.addLayout(photobleach_layout)
+
+        # Connect checkbox signals to enable/disable their corresponding spinboxes
+        self.baseline_random_check.toggled.connect(self.baseline_random_amount.setEnabled)
+        self.peak_random_check.toggled.connect(self.peak_random_amount.setEnabled)
+        self.cell_var_check.toggled.connect(self.cell_var_amount.setEnabled)
+        self.read_noise_check.toggled.connect(self.read_noise_amount.setEnabled)
+        self.bg_noise_check.toggled.connect(self.bg_amount.setEnabled)
+        self.photobleach_check.toggled.connect(self.photobleach_rate.setEnabled)
+
+        randomization_group.setLayout(random_layout)
 
         # Assemble layout
         layout.addLayout(settings_form)
         layout.addWidget(advanced_group)
+        layout.addWidget(randomization_group)  # Add the new randomization options
         layout.addStretch()
 
         # Save button
@@ -2729,6 +2871,38 @@ class MainWindow(QMainWindow):
         self.load_application_settings()
 
         return tab
+
+    def reset_randomization_settings(self):
+        """Reset all randomization settings to their default values"""
+        try:
+            # Default values for each setting
+            self.baseline_random_check.setChecked(True)
+            self.baseline_random_amount.setValue(200)
+
+            self.peak_random_check.setChecked(True)
+            self.peak_random_amount.setValue(200)
+
+            self.cell_var_check.setChecked(True)
+            self.cell_var_amount.setValue(0.2)
+
+            self.shot_noise_check.setChecked(True)
+
+            self.read_noise_check.setChecked(True)
+            self.read_noise_amount.setValue(20)
+
+            self.bg_noise_check.setChecked(True)
+            self.bg_amount.setValue(100)
+
+            self.photobleach_check.setChecked(True)
+            self.photobleach_rate.setValue(0.0005)
+
+            # Show confirmation message
+            self.statusBar().showMessage("Randomization settings reset to defaults", 3000)
+            self.debug_console.append_message("Randomization settings reset to defaults")
+
+        except Exception as e:
+            self.debug_console.append_message(f"Error resetting randomization settings: {str(e)}", level='ERROR')
+            logger.error(f"Error resetting randomization settings: {str(e)}", exc_info=True)
 
     def browse_output_directory(self):
         """Browse for output directory"""
@@ -2747,8 +2921,35 @@ class MainWindow(QMainWindow):
                 'auto_save': self.auto_save.isChecked(),
                 'file_naming': self.file_naming_combo.currentText(),
                 'file_prefix': self.file_prefix_edit.text(),
-                'num_threads': self.num_threads_spin.value()
-                # Removed random seed settings
+                'num_threads': self.num_threads_spin.value(),
+                # Add randomization settings
+                'randomization': {
+                    'baseline': {
+                        'enabled': self.baseline_random_check.isChecked(),
+                        'amount': self.baseline_random_amount.value()
+                    },
+                    'peak': {
+                        'enabled': self.peak_random_check.isChecked(),
+                        'amount': self.peak_random_amount.value()
+                    },
+                    'cell_variability': {
+                        'enabled': self.cell_var_check.isChecked(),
+                        'amount': self.cell_var_amount.value()
+                    },
+                    'shot_noise': self.shot_noise_check.isChecked(),
+                    'read_noise': {
+                        'enabled': self.read_noise_check.isChecked(),
+                        'amount': self.read_noise_amount.value()
+                    },
+                    'background': {
+                        'enabled': self.bg_noise_check.isChecked(),
+                        'amount': self.bg_amount.value()
+                    },
+                    'photobleaching': {
+                        'enabled': self.photobleach_check.isChecked(),
+                        'rate': self.photobleach_rate.value()
+                    }
+                }
             }
 
             # Create settings directory if it doesn't exist
@@ -2791,7 +2992,43 @@ class MainWindow(QMainWindow):
                 self.file_prefix_edit.setText(settings.get('file_prefix', 'FLIPR_simulation'))
                 self.num_threads_spin.setValue(settings.get('num_threads', 4))
 
-                # Removed setting the random seed from here
+                # Load randomization settings if they exist
+                if 'randomization' in settings:
+                    random_settings = settings['randomization']
+
+                    # Baseline randomization
+                    if 'baseline' in random_settings:
+                        self.baseline_random_check.setChecked(random_settings['baseline'].get('enabled', True))
+                        self.baseline_random_amount.setValue(random_settings['baseline'].get('amount', 200))
+
+                    # Peak randomization
+                    if 'peak' in random_settings:
+                        self.peak_random_check.setChecked(random_settings['peak'].get('enabled', True))
+                        self.peak_random_amount.setValue(random_settings['peak'].get('amount', 200))
+
+                    # Cell variability
+                    if 'cell_variability' in random_settings:
+                        self.cell_var_check.setChecked(random_settings['cell_variability'].get('enabled', True))
+                        self.cell_var_amount.setValue(random_settings['cell_variability'].get('amount', 0.2))
+
+                    # Shot noise
+                    if 'shot_noise' in random_settings:
+                        self.shot_noise_check.setChecked(random_settings.get('shot_noise', True))
+
+                    # Read noise
+                    if 'read_noise' in random_settings:
+                        self.read_noise_check.setChecked(random_settings['read_noise'].get('enabled', True))
+                        self.read_noise_amount.setValue(random_settings['read_noise'].get('amount', 20))
+
+                    # Background
+                    if 'background' in random_settings:
+                        self.bg_noise_check.setChecked(random_settings['background'].get('enabled', True))
+                        self.bg_amount.setValue(random_settings['background'].get('amount', 100))
+
+                    # Photobleaching
+                    if 'photobleaching' in random_settings:
+                        self.photobleach_check.setChecked(random_settings['photobleaching'].get('enabled', True))
+                        self.photobleach_rate.setValue(random_settings['photobleaching'].get('rate', 0.0005))
 
                 self.debug_console.append_message("Settings loaded successfully")
         except Exception as e:

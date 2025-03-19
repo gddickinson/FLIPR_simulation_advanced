@@ -120,6 +120,11 @@ class SimulationEngine:
         # Merge config with defaults
         params = {**self.default_params, **config}
 
+        # Set random seed if specified
+        if 'random_seed' in params and params['random_seed'] is not None:
+            np.random.seed(params['random_seed'])
+            random.seed(params['random_seed'])
+
         # Ensure cell line and agonist properties from config are used
         if 'cell_lines' in params:
             for cell_line, properties in params['cell_lines'].items():
@@ -132,11 +137,6 @@ class SimulationEngine:
 
         if 'agonists' in params:
             self.agonists.update(params['agonists'])
-
-        # Set random seed if specified
-        if 'random_seed' in params and params['random_seed'] is not None:
-            np.random.seed(params['random_seed'])
-            random.seed(params['random_seed'])
 
         logger.info(f"Starting simulation with {params['num_timepoints']} timepoints")
 
@@ -160,7 +160,7 @@ class SimulationEngine:
         else:
             agonist_layout = self._create_default_agonist_layout(rows, cols, 'ATP')
 
-        # New: Get group ID layout or create default
+        # Get group ID layout or create default
         if 'group_id_layout' in params:
             group_id_layout = np.array(params['group_id_layout'])
         else:
@@ -193,21 +193,28 @@ class SimulationEngine:
                 agonist = agonist_layout[row, col]
                 cell_id = f"{chr(65 + row)}{col + 1}"  # e.g., A1, B5, etc.
                 concentration = concentration_layout[row, col]
-                # New: Get group ID for this well
+                # Get group ID for this well
                 group_id = group_id_layout[row, col]
 
                 if cell_line not in self.cell_lines or agonist not in self.agonists:
-                    plate_data[well] = self._add_realistic_noise(np.zeros(params['num_timepoints']),
-                                                               params['read_noise'],
-                                                               params['background'],
-                                                               params['photobleaching_rate'])
+                    # Use randomization settings if available
+                    randomization = params.get('randomization')
+
+                    plate_data[well] = self._add_realistic_noise(
+                        np.zeros(params['num_timepoints']),
+                        params['read_noise'],
+                        params['background'],
+                        params['photobleaching_rate'],
+                        randomization
+                    )
+
                     metadata.append({
                         'well_id': cell_id,
                         'cell_id': cell_id,
                         'cell_line': cell_line,
                         'agonist': agonist,
                         'concentration': concentration,
-                        'group_id': group_id,  # New: Include group ID
+                        'group_id': group_id,
                         'valid': False,
                         'error': 'Invalid cell line or agonist'
                     })
@@ -225,21 +232,24 @@ class SimulationEngine:
                 # Calculate final response factor
                 response_factor = agonist_factor * dose_response_factor
 
-                # Generate calcium response
+                # Generate calcium response with randomization settings if available
+                randomization = params.get('randomization')
+
                 response = self._generate_calcium_response(
                     cell_params['baseline'],
                     cell_params['peak_ionomycin'],
                     cell_params['peak_other'],
-                    cell_params.get('rise_rate_ionomycin', cell_params.get('rise_rate', 0.1)),  # Backward compatibility
-                    cell_params.get('rise_rate_other', cell_params.get('rise_rate', 0.07)),     # Backward compatibility
-                    cell_params.get('decay_rate_ionomycin', cell_params.get('decay_rate', 0.05)), # Backward compatibility
-                    cell_params.get('decay_rate_other', cell_params.get('decay_rate', 0.03)),   # Backward compatibility
+                    cell_params.get('rise_rate_ionomycin', cell_params.get('rise_rate', 0.1)),
+                    cell_params.get('rise_rate_other', cell_params.get('rise_rate', 0.07)),
+                    cell_params.get('decay_rate_ionomycin', cell_params.get('decay_rate', 0.05)),
+                    cell_params.get('decay_rate_other', cell_params.get('decay_rate', 0.03)),
                     response_factor,
                     agonist,
                     params['time_interval'],
                     total_time,
                     params['agonist_addition_time'],
-                    params['num_timepoints']
+                    params['num_timepoints'],
+                    randomization
                 )
 
                 # Apply any active error models
@@ -253,8 +263,28 @@ class SimulationEngine:
                     response,
                     params['read_noise'],
                     params['background'],
-                    params['photobleaching_rate']
+                    params['photobleaching_rate'],
+                    randomization
                 )
+
+                # Apply cell-to-cell variability if enabled
+                if randomization and 'cell_variability' in randomization:
+                    cell_var_settings = randomization['cell_variability']
+                    if cell_var_settings.get('enabled', True):
+                        # Find non-baseline portion of the response
+                        baseline_end = int(params['agonist_addition_time'] / params['time_interval'])
+
+                        # Calculate the peak of the response
+                        if len(noisy_response) > baseline_end:
+                            baseline = np.mean(noisy_response[:baseline_end]) if baseline_end > 0 else noisy_response[0]
+
+                            # Apply random scaling to the peak response part
+                            variability = cell_var_settings.get('amount', 0.2)
+                            scale_factor = 1.0 + np.random.normal(0, variability)
+                            scale_factor = max(0.1, scale_factor)  # Ensure it doesn't go too low
+
+                            # Apply the scaling while preserving baseline
+                            noisy_response[baseline_end:] = baseline + scale_factor * (noisy_response[baseline_end:] - baseline)
 
                 plate_data[well] = noisy_response
 
@@ -266,7 +296,7 @@ class SimulationEngine:
                     'agonist': agonist,
                     'concentration': concentration,
                     'response_factor': response_factor,
-                    'group_id': group_id,  # New: Include group ID
+                    'group_id': group_id,
                     'valid': True
                 })
 
@@ -368,8 +398,11 @@ class SimulationEngine:
 
         return layout
 
-    def _add_random_amount(self, value, amount=200):
+    def _add_random_amount(self, value, amount=200, enable=True):
         """Add a random amount to a value within the specified range"""
+        if not enable:
+            return value
+
         random_amount = random.randint(-amount, amount)
         new_value = value + random_amount
         return max(0, new_value)  # Ensure value is non-negative
@@ -378,14 +411,25 @@ class SimulationEngine:
                                  rise_rate_ionomycin, rise_rate_other,
                                  decay_rate_ionomycin, decay_rate_other,
                                  agonist_factor, agonist, time_interval,
-                                 total_time, agonist_addition_time, num_timepoints):
+                                 total_time, agonist_addition_time, num_timepoints,
+                                 randomization=None):
         """Generate a calcium response curve based on the parameters"""
         # Create time array
         time = np.arange(0, total_time, time_interval)
         response = np.zeros(num_timepoints)
 
-        # Add some randomness to baseline
-        baseline = self._add_random_amount(baseline)
+        # Apply randomization if configured
+        if randomization is None:
+            randomization = {
+                'baseline': {'enabled': True, 'amount': 200},
+                'peak': {'enabled': True, 'amount': 200}
+            }
+
+        # Add some randomness to baseline if enabled
+        baseline_settings = randomization.get('baseline', {'enabled': True, 'amount': 200})
+        baseline = self._add_random_amount(baseline,
+                                         amount=baseline_settings.get('amount', 200),
+                                         enable=baseline_settings.get('enabled', True))
 
         # Set baseline values
         response[:int(agonist_addition_time / time_interval)] = baseline
@@ -404,8 +448,11 @@ class SimulationEngine:
             rise_rate = rise_rate_other
             decay_rate = decay_rate_other
 
-        # Add randomness to peak
-        peak = self._add_random_amount(peak)
+        # Add randomness to peak if enabled
+        peak_settings = randomization.get('peak', {'enabled': True, 'amount': 200})
+        peak = self._add_random_amount(peak,
+                                     amount=peak_settings.get('amount', 200),
+                                     enable=peak_settings.get('enabled', True))
 
         # Calculate adjusted peak based on agonist factor
         adjusted_peak = baseline + (peak - baseline) * agonist_factor
@@ -419,10 +466,19 @@ class SimulationEngine:
         return response
 
     # In SimulationEngine class
-    def _add_realistic_noise(self, signal, read_noise=20, background=100, photobleaching_rate=0.0005):
+    def _add_realistic_noise(self, signal, read_noise=20, background=100, photobleaching_rate=0.0005, randomization=None):
         """Add realistic noise to the fluorescence signal"""
         # Ensure signal is float
         signal = signal.astype(float)
+
+        # Use defaults if randomization is not provided
+        if randomization is None:
+            randomization = {
+                'shot_noise': True,
+                'read_noise': {'enabled': True, 'amount': read_noise},
+                'background': {'enabled': True, 'amount': background},
+                'photobleaching': {'enabled': True, 'rate': photobleaching_rate}
+            }
 
         # Ensure all values are in a valid range for Poisson noise
         # NumPy's Poisson has issues with very small or very large lambda values
@@ -431,40 +487,54 @@ class SimulationEngine:
         # First handle negative or very small values
         signal = np.maximum(signal, 0.01)  # Set a small positive minimum
 
-        # Add shot noise (Poisson or Gaussian approximation)
-        noisy_signal = np.empty_like(signal)
+        # Add shot noise (Poisson or Gaussian approximation) if enabled
+        if randomization.get('shot_noise', True):
+            noisy_signal = np.empty_like(signal)
 
-        # Use threshold to determine which method to use
-        # NumPy's poisson implementation typically has issues when lambda > 10^7
-        poisson_threshold = 1e7
+            # Use threshold to determine which method to use
+            # NumPy's poisson implementation typically has issues when lambda > 10^7
+            poisson_threshold = 1e7
 
-        # Split the signal into manageable and large values
-        small_mask = signal < poisson_threshold
-        large_mask = ~small_mask
+            # Split the signal into manageable and large values
+            small_mask = signal < poisson_threshold
+            large_mask = ~small_mask
 
-        # For small values, use actual Poisson distribution
-        if np.any(small_mask):
-            noisy_signal[small_mask] = np.random.poisson(signal[small_mask]).astype(float)
+            # For small values, use actual Poisson distribution
+            if np.any(small_mask):
+                noisy_signal[small_mask] = np.random.poisson(signal[small_mask]).astype(float)
 
-        # For large values, use Gaussian approximation of Poisson: N(λ, λ)
-        # For Poisson distribution with large lambda, it approaches N(λ, λ)
-        if np.any(large_mask):
-            large_values = signal[large_mask]
-            std_dev = np.sqrt(large_values)  # Standard deviation is sqrt(lambda) for Poisson
-            noisy_signal[large_mask] = np.random.normal(large_values, std_dev)
+            # For large values, use Gaussian approximation of Poisson: N(λ, λ)
+            # For Poisson distribution with large lambda, it approaches N(λ, λ)
+            if np.any(large_mask):
+                large_values = signal[large_mask]
+                std_dev = np.sqrt(large_values)  # Standard deviation is sqrt(lambda) for Poisson
+                noisy_signal[large_mask] = np.random.normal(large_values, std_dev)
+        else:
+            # If shot noise is disabled, just copy the original signal
+            noisy_signal = signal.copy()
 
-        # Read noise (Gaussian) - Make sure we're using the parameter value
-        noisy_signal += np.random.normal(0, read_noise, signal.shape)
+        # Read noise (Gaussian) if enabled
+        read_noise_settings = randomization.get('read_noise', {'enabled': True, 'amount': read_noise})
+        if read_noise_settings.get('enabled', True):
+            noise_amount = read_noise_settings.get('amount', read_noise)
+            noisy_signal += np.random.normal(0, noise_amount, signal.shape)
 
-        # Background noise - Make sure we're using the parameter value
-        noisy_signal += background
+        # Background noise if enabled
+        bg_settings = randomization.get('background', {'enabled': True, 'amount': background})
+        if bg_settings.get('enabled', True):
+            bg_amount = bg_settings.get('amount', background)
+            noisy_signal += bg_amount
 
-        # Photobleaching - Make sure we're using the parameter value
-        time = np.arange(len(signal))
-        photobleaching = np.exp(-photobleaching_rate * time)
-        noisy_signal *= photobleaching
+        # Photobleaching if enabled
+        photobleach_settings = randomization.get('photobleaching', {'enabled': True, 'rate': photobleaching_rate})
+        if photobleach_settings.get('enabled', True):
+            bleach_rate = photobleach_settings.get('rate', photobleaching_rate)
+            time = np.arange(len(signal))
+            photobleaching = np.exp(-bleach_rate * time)
+            noisy_signal *= photobleaching
 
         return np.maximum(noisy_signal, 0).round(2)  # Ensure non-negative values and round
+
 
     # Default layout generators
     def _create_default_cell_id_layout(self, num_wells):
