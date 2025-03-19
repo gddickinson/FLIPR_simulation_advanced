@@ -84,7 +84,16 @@ class ConfigManager:
                     'rise_rate_other': 0.07,
                     'decay_rate_ionomycin': 0.03,
                     'decay_rate_other': 0.02
-                }
+                },
+                'NTC': {
+                    'baseline': 100,            # Lower baseline (just background)
+                    'peak_ionomycin': 110,      # Minimal change from baseline
+                    'peak_other': 105,          # Even less change for other agonists
+                    'rise_rate_ionomycin': 0.01, # Very slow rise
+                    'rise_rate_other': 0.01,     # Very slow rise
+                    'decay_rate_ionomycin': 0.01, # Very slow decay
+                    'decay_rate_other': 0.01      # Very slow decay
+                },
             },
             'agonists': {
                 'ATP': 2.0,

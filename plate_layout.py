@@ -353,31 +353,25 @@ class PlateLayoutEditor(QWidget):
         """Create a default cell line layout"""
         layout = np.empty((rows, cols), dtype=object)
 
-        # Set up some default patterns
+        # Fill with Neurotypical by default
         for i in range(rows):
             for j in range(cols):
-                if self.plate_format == '96-well':
-                    if j == cols - 1:
-                        layout[i, j] = 'Positive Control'
-                    elif j == cols - 2:
-                        layout[i, j] = 'Negative Control'
-                    elif j % 3 == 0:
-                        layout[i, j] = 'Neurotypical'
-                    elif j % 3 == 1:
-                        layout[i, j] = 'ASD'
-                    else:
-                        layout[i, j] = 'FXS'
-                else:  # 384-well
-                    if j == cols - 1 or j == cols - 2:
-                        layout[i, j] = 'Positive Control'
-                    elif j == cols - 3 or j == cols - 4:
-                        layout[i, j] = 'Negative Control'
-                    elif j % 6 < 2:
-                        layout[i, j] = 'Neurotypical'
-                    elif j % 6 < 4:
-                        layout[i, j] = 'ASD'
-                    else:
-                        layout[i, j] = 'FXS'
+                layout[i, j] = 'Neurotypical'
+
+        # Explicitly set specific columns
+        for i in range(rows):
+            # Column 12 (index 11) - Neurotypical (or Positive Control)
+            layout[i, 11] = 'Neurotypical'
+
+            # Column 11 (index 10) - NTC
+            layout[i, 10] = 'NTC'
+
+            # Column 10 (index 9) - ASD
+            layout[i, 9] = 'ASD'
+
+            # Column 9 (index 8) - Some FXS samples in even rows
+            if i % 2 == 0:
+                layout[i, 8] = 'FXS'
 
         return layout
 

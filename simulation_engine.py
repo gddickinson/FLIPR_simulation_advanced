@@ -43,6 +43,15 @@ class SimulationEngine:
                 'decay_rate_ionomycin': 0.03,
                 'decay_rate_other': 0.02
             },
+            'NTC': {
+                'baseline': 100,
+                'peak_ionomycin': 110,
+                'peak_other': 105,
+                'rise_rate_ionomycin': 0.01,
+                'rise_rate_other': 0.01,
+                'decay_rate_ionomycin': 0.01,
+                'decay_rate_other': 0.01
+            },
         }
 
         # Default agonist characteristics
@@ -339,23 +348,23 @@ class SimulationEngine:
         """Create a default cell line layout with the specified default cell line"""
         layout = np.empty((rows, cols), dtype=object)
 
-        # Fill most wells with the default cell line
+        # Fill with default cell line first
         layout.fill(default_cell_line)
 
-        # Add some variation in the rightmost columns for comparison
-        # Right column with Neurotypical (as positive control reference)
+        # EXPLICITLY assign by column index to avoid confusion
         for i in range(rows):
-            layout[i, cols-1] = 'Neurotypical'
+            # Column 12 (index 11) - Neurotypical
+            layout[i, 11] = 'Neurotypical'
 
-        # Second to right column with ASD (as negative control reference)
-        for i in range(rows):
-            layout[i, cols-2] = 'ASD'
+            # Column 11 (index 10) - NTC
+            layout[i, 10] = 'NTC'
 
-        # Add some FXS samples if it's not the default
-        if default_cell_line != 'FXS':
-            for i in range(rows):
-                if i % 2 == 0:  # Even rows
-                    layout[i, cols-3] = 'FXS'
+            # Column 10 (index 9) - ASD
+            layout[i, 9] = 'ASD'
+
+            # Column 9 (index 8) - Some FXS samples
+            if i % 2 == 0:  # Even rows
+                layout[i, 8] = 'FXS'
 
         return layout
 

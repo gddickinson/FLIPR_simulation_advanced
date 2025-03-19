@@ -22,7 +22,8 @@ class PlotManager:
             'Neurotypical': '#4DAF4A',      # Green
             'ASD': '#984EA3',               # Purple
             'FXS': '#FF7F00',               # Orange
-            'Default': '#999999'            # Gray
+            'NTC': '#999999',               # Gray
+            'Default': '#666666'            # Darker Gray
         }
 
         self.agonist_colors = {

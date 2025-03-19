@@ -1088,7 +1088,7 @@ class MainWindow(QMainWindow):
         cell_col_layout.addWidget(QLabel("Cell Type:"))
 
         self.cell_type_combo = QComboBox()
-        self.cell_type_combo.addItems(["Neurotypical", "ASD", "FXS"])
+        self.cell_type_combo.addItems(["Neurotypical", "ASD", "FXS", "NTC"])
         cell_col_layout.addWidget(self.cell_type_combo)
 
         self.apply_cell_btn = QPushButton("Apply to Column")
@@ -1100,7 +1100,7 @@ class MainWindow(QMainWindow):
         # Cell line concentrations
         cell_control_layout.addWidget(QLabel("Cell Characteristics:"))
 
-        self.cell_property_table = QTableWidget(3, 8)
+        self.cell_property_table = QTableWidget(4, 8)
         self.cell_property_table.setHorizontalHeaderLabels([
             "Cell Type",
             "Baseline",
@@ -1116,7 +1116,7 @@ class MainWindow(QMainWindow):
         self.cell_property_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
 
         # Fill in default cell properties
-        cell_types = ["Neurotypical", "ASD", "FXS"]
+        cell_types = ["Neurotypical", "ASD", "FXS", "NTC"]
 
         for i, cell_type in enumerate(cell_types):
             self.cell_property_table.setItem(i, 0, QTableWidgetItem(cell_type))
@@ -1328,7 +1328,7 @@ class MainWindow(QMainWindow):
         # Column-based layout: (ASD, FXS, Neurotypical, ASD, ASD, Neurotypical, FXS, Neurotypical, Neurotypical, ASD, ASD, Neurotypical)
         cell_column_types = [
             "ASD", "FXS", "Neurotypical", "ASD", "ASD", "Neurotypical",
-            "FXS", "Neurotypical", "Neurotypical", "ASD", "ASD", "Neurotypical"
+            "FXS", "Neurotypical", "Neurotypical", "ASD", "NTC", "Neurotypical"
         ]
 
         for row in range(8):
@@ -1384,7 +1384,8 @@ class MainWindow(QMainWindow):
         colors = {
             "Neurotypical": QColor("#4DAF4A"),  # Green
             "ASD": QColor("#984EA3"),           # Purple
-            "FXS": QColor("#FF7F00")            # Orange
+            "FXS": QColor("#FF7F00"),           # Orange
+            "NTC": QColor("#999999")            # Gray
         }
 
         if cell_type in colors:
